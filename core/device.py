@@ -93,13 +93,17 @@ def scan_available_devices() -> list[dict]:
     except Exception:
         pass
 
+    has_7555 = "127.0.0.1:7555" in online_serials
+
     for inst in instances:
         port = _mumu_port(inst["index"])
-        # 尝试连接
-        if port not in online_serials:
+        # 单开模式：计算端口不在线但7555在线，用7555
+        if port not in online_serials and has_7555:
+            port = "127.0.0.1:7555"
             _try_connect(port)
-        # 检查是否在线
-        is_connected = port in online_serials
+        elif port not in online_serials:
+            _try_connect(port)
+        is_connected = port in online_serials or has_7555
         result.append({
             "name": inst["name"], "serial": port, "connected": is_connected
         })

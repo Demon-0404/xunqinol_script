@@ -9,18 +9,17 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='repla
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
-import sys
-import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from core.device import (
     connect_device_by_serial, switch_device, get_device_info,
-    init_all_devices, list_devices, scan_available_devices,
+    list_devices, scan_available_devices,
 )
 from tasks.walk_demo import WalkDemo
 from tasks.flow_task import FlowTask
+from tasks.tower_task import TowerTask
 
 
 class App:
@@ -43,39 +42,22 @@ class App:
         top = ttk.LabelFrame(self.root, text="设备管理", padding=6)
         top.pack(fill=tk.X, padx=8, pady=(8, 4))
 
-        # 第一行：设备选择 + 连接
         row1 = ttk.Frame(top)
         row1.pack(fill=tk.X)
 
-        ttk.Label(row1, text="当前设备:").pack(side=tk.LEFT)
+        ttk.Label(row1, text="设备:").pack(side=tk.LEFT)
         self._device_var = tk.StringVar(value="")
         self._device_combo = ttk.Combobox(row1, textvariable=self._device_var,
-                                          values=[], width=14, state="readonly")
+                                          values=[], width=16, state="readonly")
         self._device_combo.pack(side=tk.LEFT, padx=4)
-        self._device_combo.bind("<<ComboboxSelected>>", self._on_switch_device)
 
-        ttk.Button(row1, text="刷新设备", command=self._on_refresh_devices).pack(side=tk.LEFT, padx=4)
+        self._connect_btn = ttk.Button(row1, text="连接", command=self._on_connect_device)
+        self._connect_btn.pack(side=tk.LEFT, padx=2)
 
-        ttk.Label(row1, text="  ADB地址:").pack(side=tk.LEFT)
-        self._addr_var = tk.StringVar(value="127.0.0.1:7555")
-        ttk.Combobox(row1, textvariable=self._addr_var,
-                     values=["127.0.0.1:7555", "127.0.0.1:7557",
-                             "127.0.0.1:16384", "127.0.0.1:16386"], width=16).pack(side=tk.LEFT, padx=2)
+        ttk.Button(row1, text="刷新", command=self._on_refresh_devices).pack(side=tk.LEFT, padx=2)
 
-        ttk.Label(row1, text="名称:").pack(side=tk.LEFT)
-        self._dev_name_var = tk.StringVar(value="设备1")
-        ttk.Entry(row1, textvariable=self._dev_name_var, width=8).pack(side=tk.LEFT, padx=2)
-
-        self._connect_btn = ttk.Button(row1, text="添加设备", command=self._on_add_device)
-        self._connect_btn.pack(side=tk.LEFT, padx=4)
-
-        # 第二行：设备信息
-        row2 = ttk.Frame(top)
-        row2.pack(fill=tk.X, pady=(4, 0))
-        self._status_label = ttk.Label(row2, text="未连接任何设备", foreground="gray")
-        self._status_label.pack(side=tk.LEFT)
-        self._info_label = ttk.Label(row2, text="")
-        self._info_label.pack(side=tk.RIGHT)
+        self._status_label = ttk.Label(row1, text="未连接", foreground="gray")
+        self._status_label.pack(side=tk.LEFT, padx=8)
 
         # 主体：标签页 + 日志
         body = ttk.Frame(self.root)
@@ -89,6 +71,7 @@ class App:
         self._build_quest_tab(notebook)
         self._build_dungeon_tab(notebook)
         self._build_pet_tab(notebook)
+        self._build_tower_tab(notebook)
 
         # 右侧：日志
         right = ttk.Frame(body)
@@ -236,75 +219,91 @@ class App:
                    command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "pet"))
                    ).pack(side=tk.RIGHT)
 
+    # ── 玄兵塔页 ─────────────────────────────────
+
+    def _build_tower_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="玄兵塔")
+
+        help_text = (
+            "进入百炼玄兵塔后启动。\n"
+            "自动检测黄色名字的怪物，逐个交战。\n"
+            "需要模板: templates/tower/\n"
+            "  enter_battle.png / battle_dialog.png / auto_btn.png / battle_end.png"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
+        ttk.Label(tab, text="每步等待(秒):").pack(anchor=tk.W)
+        self._tower_interval_var = tk.IntVar(value=2)
+        ttk.Spinbox(tab, from_=1, to=5, textvariable=self._tower_interval_var, width=4).pack(anchor=tk.W, pady=2)
+
+        bf = ttk.Frame(tab)
+        bf.pack(fill=tk.X, pady=(12, 0))
+        self._tower_start_btn = ttk.Button(bf, text="开始刷塔", command=self._on_start_tower)
+        self._tower_start_btn.pack(side=tk.LEFT, padx=2)
+        self._tower_stop_btn = ttk.Button(bf, text="停止", command=self._on_stop_task, state=tk.DISABLED)
+        self._tower_stop_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="打开模板目录",
+                   command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "tower"))
+                   ).pack(side=tk.RIGHT)
+
     # ── 设备管理 ──────────────────────────────────
 
     def _auto_init(self):
-        """启动时自动扫描 MuMu 实例并连接"""
+        """启动时自动扫描 MuMu 实例，填充下拉列表"""
         self._log("正在扫描 MuMu 实例...")
-        devices = init_all_devices()
-        names = [d["name"] for d in devices]
-        self._log(f"发现 {len(devices)} 个实例: {', '.join(names)}")
-        self._refresh_device_list()
+        self._available_devices = scan_available_devices()
+        names = [d["name"] for d in self._available_devices]
+        self._device_combo["values"] = names
+        if names:
+            self._device_var.set(names[0])
+        self._log(f"发现 {len(names)} 个实例: {', '.join(names)}")
 
     def _on_refresh_devices(self):
         """手动刷新设备列表"""
         self._log("正在重新扫描...")
-        devices = scan_available_devices()
-        # 重新连接
-        for d in devices:
-            if not d["connected"]:
-                import subprocess
-                subprocess.run([os.environ.get("ANDROID_ADB", "adb"), "connect", d["serial"]],
-                             capture_output=True, timeout=5,
-                             encoding="utf-8", errors="replace")
-            connect_device_by_serial(d["name"], d["serial"])
-        self._refresh_device_list()
-        names = [d["name"] for d in devices]
-        self._log(f"共 {len(devices)} 个实例: {', '.join(names)}")
+        self._available_devices = scan_available_devices()
+        names = [d["name"] for d in self._available_devices]
+        self._device_combo["values"] = names
+        if names and not self._device_var.get():
+            self._device_var.set(names[0])
+        self._log(f"共 {len(names)} 个实例: {', '.join(names)}")
 
-    def _on_add_device(self):
-        """添加新设备"""
-        addr = self._addr_var.get()
-        name = self._dev_name_var.get()
-        if not name.strip():
-            name = addr
+    def _on_connect_device(self):
+        """连接选中的设备"""
+        name = self._device_var.get()
+        if not name:
+            self._log("请先选择设备")
+            return
+        # 找到对应的 serial
+        serial = None
+        for d in self._available_devices:
+            if d["name"] == name:
+                serial = d["serial"]
+                break
+        if not serial:
+            self._log(f"未找到设备 {name} 的地址")
+            return
 
-        self._log(f"正在连接 {name} ({addr}) ...")
+        self._log(f"正在连接 {name} ...")
         self._connect_btn.config(state=tk.DISABLED)
 
         def _do():
-            ok = connect_device_by_serial(name, addr)
-            self.root.after(0, lambda: self._on_add_done(name, ok))
+            ok = connect_device_by_serial(name, serial)
+            self.root.after(0, lambda: self._on_connect_done(name, ok))
 
         threading.Thread(target=_do, daemon=True).start()
 
-    def _on_add_done(self, name: str, ok: bool):
+    def _on_connect_done(self, name: str, ok: bool):
         self._connect_btn.config(state=tk.NORMAL)
-        self._refresh_device_list()
         if ok:
-            self._device_var.set(name)
-            self._on_switch_device()
-            self._log(f"{name} 添加成功")
-
-            # 自动切到这个设备
             switch_device(name)
             info = get_device_info(name)
-            self._info_label.config(text=f"{info['width']}x{info['height']}")
+            self._status_label.config(text=f"已连接: {name}", foreground="green")
+            self._log(f"{name} 连接成功 ({info['width']}x{info['height']})")
         else:
-            self._log(f"{name} 连接失败, 请检查地址是否正确")
-
-    def _on_switch_device(self, event=None):
-        """设备下拉切换"""
-        name = self._device_var.get()
-        if not name:
-            return
-        if switch_device(name):
-            info = get_device_info(name)
-            self._status_label.config(text=f"当前: {name}", foreground="green")
-            self._info_label.config(text=f"{info['width']}x{info['height']}")
-            self._log(f"已切换到: {name}")
-        else:
-            self._status_label.config(text=f"{name} 连接异常", foreground="red")
+            self._status_label.config(text="连接失败", foreground="red")
+            self._log(f"{name} 连接失败")
 
     def _refresh_device_list(self):
         """刷新设备下拉列表"""
@@ -314,11 +313,9 @@ class App:
         if self._device_names:
             if not self._device_var.get() or self._device_var.get() not in self._device_names:
                 self._device_var.set(self._device_names[0])
-            self._on_switch_device()
         else:
             self._device_var.set("")
-            self._status_label.config(text="未连接任何设备", foreground="gray")
-            self._info_label.config(text="")
+            self._status_label.config(text="未连接", foreground="gray")
 
     # ── 当前选中设备名 ─────────────────────────────
 
@@ -409,17 +406,31 @@ class App:
         self._pet_start_btn.config(state=tk.DISABLED)
         self._pet_stop_btn.config(state=tk.NORMAL)
 
+    # ── 玄兵塔 ─────────────────────────────────────
+
+    def _on_start_tower(self):
+        dev = self._selected_device()
+        if not dev:
+            self._log("错误: 请先连接设备!")
+            return
+        switch_device(dev)
+        self._current_task = TowerTask()
+        self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
+        self._current_task.start()
+        self._tower_start_btn.config(state=tk.DISABLED)
+        self._tower_stop_btn.config(state=tk.NORMAL)
+
     # ── 通用 ─────────────────────────────────────
 
     def _on_stop_task(self):
         if self._current_task:
             self._current_task.stop()
         for b in [self._walk_start_btn, self._quest_start_btn,
-                  self._dung_start_btn, self._pet_start_btn]:
+                  self._dung_start_btn, self._pet_start_btn, self._tower_start_btn]:
             try: b.config(state=tk.NORMAL)
             except: pass
         for b in [self._walk_stop_btn, self._quest_stop_btn,
-                  self._dung_stop_btn, self._pet_stop_btn]:
+                  self._dung_stop_btn, self._pet_stop_btn, self._tower_stop_btn]:
             try: b.config(state=tk.DISABLED)
             except: pass
 
