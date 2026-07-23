@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Airtest
+log/
+logs/
+*.log
+
+# Screenshots
+screenshots/
+*.png
+!templates/**/*.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Conda
+conda/
+.claude/

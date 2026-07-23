@@ -1,0 +1,191 @@
+"""寻秦OL 自动化助手 - 主程序"""
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+import threading
+import sys
+import os
+
+# 把项目根目录加入路径
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from core.device import connect_mumu, get_device_info, MUMU_PORTS
+from tasks.walk_demo import WalkDemo
+
+
+class App:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("寻秦OL 自动化助手")
+        self.root.geometry("620x580")
+        self.root.resizable(True, True)
+
+        self._current_task = None  # WalkDemo 实例
+
+        self._build_ui()
+        self._update_status_timer()
+
+    # ── UI 构建 ─────────────────────────────────────
+
+    def _build_ui(self):
+        # 顶部：设备连接
+        device_frame = ttk.LabelFrame(self.root, text="设备连接", padding=8)
+        device_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        ttk.Label(device_frame, text="MuMu 地址:").pack(side=tk.LEFT)
+        self._addr_var = tk.StringVar(value=MUMU_PORTS.get("MuMu 12", "127.0.0.1:16384"))
+        addr_combo = ttk.Combobox(device_frame, textvariable=self._addr_var,
+                                  values=list(MUMU_PORTS.values()), width=18)
+        addr_combo.pack(side=tk.LEFT, padx=4)
+
+        self._connect_btn = ttk.Button(device_frame, text="连接", command=self._on_connect)
+        self._connect_btn.pack(side=tk.LEFT, padx=4)
+
+        self._status_label = ttk.Label(device_frame, text="未连接", foreground="gray")
+        self._status_label.pack(side=tk.LEFT, padx=8)
+
+        self._info_label = ttk.Label(device_frame, text="")
+        self._info_label.pack(side=tk.RIGHT)
+
+        # 主体内容区域
+        body = ttk.Frame(self.root)
+        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        # 左侧：操作区
+        left = ttk.Frame(body)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # ── 走路 Demo 区域
+        walk_frame = ttk.LabelFrame(left, text="走路 Demo", padding=8)
+        walk_frame.pack(fill=tk.X, pady=(0, 4))
+
+        # 方向选择
+        dir_frame = ttk.Frame(walk_frame)
+        dir_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(dir_frame, text="方向:").pack(side=tk.LEFT)
+        self._dir_var = tk.StringVar(value="right")
+        for d in ["上", "下", "左", "右"]:
+            ttk.Radiobutton(dir_frame, text=d, variable=self._dir_var,
+                            value={"上": "up", "下": "down", "左": "left", "右": "right"}[d]
+                            ).pack(side=tk.LEFT, padx=2)
+
+        # 步数
+        step_frame = ttk.Frame(walk_frame)
+        step_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(step_frame, text="步数:").pack(side=tk.LEFT)
+        self._steps_var = tk.IntVar(value=5)
+        ttk.Spinbox(step_frame, from_=1, to=50, textvariable=self._steps_var,
+                    width=5).pack(side=tk.LEFT, padx=4)
+
+        # 摇杆中心坐标
+        joy_frame = ttk.Frame(walk_frame)
+        joy_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(joy_frame, text="摇杆 X:").pack(side=tk.LEFT)
+        self._joy_x_var = tk.IntVar(value=100)
+        ttk.Entry(joy_frame, textvariable=self._joy_x_var, width=6).pack(side=tk.LEFT, padx=2)
+        ttk.Label(joy_frame, text="  Y:").pack(side=tk.LEFT)
+        self._joy_y_var = tk.IntVar(value=1600)
+        ttk.Entry(joy_frame, textvariable=self._joy_y_var, width=6).pack(side=tk.LEFT, padx=2)
+
+        # 按钮
+        btn_frame = ttk.Frame(walk_frame)
+        btn_frame.pack(fill=tk.X, pady=(4, 0))
+        self._walk_start_btn = ttk.Button(btn_frame, text="开始走路", command=self._on_start_walk)
+        self._walk_start_btn.pack(side=tk.LEFT, padx=2)
+        self._walk_stop_btn = ttk.Button(btn_frame, text="停止", command=self._on_stop_walk,
+                                         state=tk.DISABLED)
+        self._walk_stop_btn.pack(side=tk.LEFT, padx=2)
+        self._screenshot_btn = ttk.Button(btn_frame, text="截一张图", command=self._on_screenshot)
+        self._screenshot_btn.pack(side=tk.RIGHT, padx=2)
+
+        # ── 右侧：日志
+        right = ttk.Frame(body)
+        right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(4, 0))
+
+        log_frame = ttk.LabelFrame(right, text="运行日志", padding=4)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+
+        self._log_area = scrolledtext.ScrolledText(log_frame, width=36, height=20,
+                                                   state=tk.DISABLED, wrap=tk.WORD)
+        self._log_area.pack(fill=tk.BOTH, expand=True)
+
+    # ── 设备连接 ──────────────────────────────────
+
+    def _on_connect(self):
+        addr = self._addr_var.get()
+        self._log(f"正在连接 {addr} ...")
+        self._connect_btn.config(state=tk.DISABLED)
+
+        def _connect():
+            ok = connect_mumu(addr)
+            self.root.after(0, lambda: self._on_connect_done(ok))
+
+        threading.Thread(target=_connect, daemon=True).start()
+
+    def _on_connect_done(self, ok: bool):
+        self._connect_btn.config(state=tk.NORMAL)
+        if ok:
+            self._status_label.config(text="已连接", foreground="green")
+            info = get_device_info()
+            self._info_label.config(text=f"分辨率: {info['screen_size']}")
+            self._log("连接成功")
+        else:
+            self._status_label.config(text="连接失败", foreground="red")
+            self._log("连接失败，请检查模拟器是否开启")
+
+    def _update_status_timer(self):
+        """每 5 秒刷新一次设备信息"""
+        try:
+            info = get_device_info()
+            if info["connected"]:
+                self._info_label.config(text=f"分辨率: {info['screen_size']}")
+        except Exception:
+            pass
+        self.root.after(5000, self._update_status_timer)
+
+    # ── 走路 Demo ─────────────────────────────────
+
+    def _on_start_walk(self):
+        direction = self._dir_var.get()
+        steps = self._steps_var.get()
+        joy_x = self._joy_x_var.get()
+        joy_y = self._joy_y_var.get()
+
+        self._current_task = WalkDemo(direction=direction, steps=steps,
+                                      joy_x=joy_x, joy_y=joy_y)
+        self._current_task.set_log_callback(lambda msg: self.root.after(0, self._log, msg))
+        self._current_task.start()
+
+        self._walk_start_btn.config(state=tk.DISABLED)
+        self._walk_stop_btn.config(state=tk.NORMAL)
+
+    def _on_stop_walk(self):
+        if self._current_task:
+            self._current_task.stop()
+        self._walk_start_btn.config(state=tk.NORMAL)
+        self._walk_stop_btn.config(state=tk.DISABLED)
+
+    def _on_screenshot(self):
+        """截一张图保存到 logs 目录"""
+        from core.actions import screenshot
+        import time
+        filename = f"logs/screenshot_{time.strftime('%Y%m%d_%H%M%S')}.png"
+        screenshot(filename)
+        self._log(f"截图已保存: {filename}")
+
+    # ── 日志 ─────────────────────────────────────
+
+    def _log(self, msg: str):
+        self._log_area.config(state=tk.NORMAL)
+        self._log_area.insert(tk.END, msg + "\n")
+        self._log_area.see(tk.END)
+        self._log_area.config(state=tk.DISABLED)
+
+
+def main():
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
