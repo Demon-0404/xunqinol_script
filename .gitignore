@@ -19,6 +19,7 @@ env/
 # Airtest
 log/
 logs/
+logs/*
 *.log
 
 # Screenshots
