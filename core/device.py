@@ -62,7 +62,8 @@ def _try_connect(serial: str) -> bool:
     try:
         out = subprocess.run(
             [_adb_path(), "connect", serial],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace"
         )
         return "connected" in out.stdout.lower() or "already" in out.stdout.lower()
     except Exception:
@@ -83,7 +84,8 @@ def scan_available_devices() -> list[dict]:
     online_serials = set()
     try:
         out = subprocess.run(
-            [_adb_path(), "devices"], capture_output=True, text=True, timeout=5
+            [_adb_path(), "devices"], capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace"
         )
         for line in out.stdout.strip().split("\n")[1:]:
             if "\tdevice" in line:

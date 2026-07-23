@@ -1,4 +1,11 @@
 """寻秦OL 自动化助手 - 主程序（多设备版）"""
+import sys
+import os
+import io
+# 修复 Airtest 内部 subprocess GBK 编码问题
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
@@ -248,7 +255,8 @@ class App:
             if not d["connected"]:
                 import subprocess
                 subprocess.run([os.environ.get("ANDROID_ADB", "adb"), "connect", d["serial"]],
-                             capture_output=True, timeout=5)
+                             capture_output=True, timeout=5,
+                             encoding="utf-8", errors="replace")
             connect_device_by_serial(d["name"], d["serial"])
         self._refresh_device_list()
         names = [d["name"] for d in devices]
