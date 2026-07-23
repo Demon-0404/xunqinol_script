@@ -20,6 +20,7 @@ from core.device import (
 from tasks.walk_demo import WalkDemo
 from tasks.flow_task import FlowTask
 from tasks.tower_task import TowerTask
+from tasks.monkey_task import MonkeyTask
 
 
 class App:
@@ -72,6 +73,7 @@ class App:
         self._build_dungeon_tab(notebook)
         self._build_pet_tab(notebook)
         self._build_tower_tab(notebook)
+        self._build_monkey_tab(notebook)
 
         # 右侧：日志
         right = ttk.Frame(body)
@@ -247,6 +249,34 @@ class App:
                    command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "tower"))
                    ).pack(side=tk.RIGHT)
 
+    # ── 打泼猴页 ─────────────────────────────────
+
+    def _build_monkey_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="打泼猴")
+
+        help_text = (
+            "在泼猴附近启动。\n"
+            "需要模板: templates/monkey/\n"
+            "  monkey_npc.png — 泼猴名字截图\n"
+            "  option_yubo.png — 对话框中的'夺回玉帛'"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
+        ttk.Label(tab, text="对话后等待(秒):").pack(anchor=tk.W)
+        self._monkey_wait_var = tk.IntVar(value=8)
+        ttk.Spinbox(tab, from_=1, to=30, textvariable=self._monkey_wait_var, width=4).pack(anchor=tk.W, pady=2)
+
+        bf = ttk.Frame(tab)
+        bf.pack(fill=tk.X, pady=(12, 0))
+        self._monkey_start_btn = ttk.Button(bf, text="开始打泼猴", command=self._on_start_monkey)
+        self._monkey_start_btn.pack(side=tk.LEFT, padx=2)
+        self._monkey_stop_btn = ttk.Button(bf, text="停止", command=self._on_stop_task, state=tk.DISABLED)
+        self._monkey_stop_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="打开模板目录",
+                   command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "monkey"))
+                   ).pack(side=tk.RIGHT)
+
     # ── 设备管理 ──────────────────────────────────
 
     def _auto_init(self):
@@ -420,17 +450,35 @@ class App:
         self._tower_start_btn.config(state=tk.DISABLED)
         self._tower_stop_btn.config(state=tk.NORMAL)
 
+    # ── 打泼猴 ─────────────────────────────────────
+
+    def _on_start_monkey(self):
+        dev = self._selected_device()
+        if not dev:
+            self._log("错误: 请先连接设备!")
+            return
+        switch_device(dev)
+        task = MonkeyTask()
+        task.WAIT_AFTER_OPTION = self._monkey_wait_var.get()
+        self._current_task = task
+        self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
+        self._current_task.start()
+        self._monkey_start_btn.config(state=tk.DISABLED)
+        self._monkey_stop_btn.config(state=tk.NORMAL)
+
     # ── 通用 ─────────────────────────────────────
 
     def _on_stop_task(self):
         if self._current_task:
             self._current_task.stop()
         for b in [self._walk_start_btn, self._quest_start_btn,
-                  self._dung_start_btn, self._pet_start_btn, self._tower_start_btn]:
+                  self._dung_start_btn, self._pet_start_btn, self._tower_start_btn,
+                  self._monkey_start_btn]:
             try: b.config(state=tk.NORMAL)
             except: pass
         for b in [self._walk_stop_btn, self._quest_stop_btn,
-                  self._dung_stop_btn, self._pet_stop_btn, self._tower_stop_btn]:
+                  self._dung_stop_btn, self._pet_stop_btn, self._tower_stop_btn,
+                  self._monkey_stop_btn]:
             try: b.config(state=tk.DISABLED)
             except: pass
 
