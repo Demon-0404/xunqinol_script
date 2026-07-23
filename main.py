@@ -10,7 +10,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from core.device import (
     connect_device_by_serial, switch_device, get_device_info,
-    init_default_devices, list_devices, PRESET_DEVICES, scan_adb_devices,
+    init_all_devices, list_devices, scan_available_devices,
 )
 from tasks.walk_demo import WalkDemo
 from tasks.flow_task import FlowTask
@@ -232,16 +232,27 @@ class App:
     # ── 设备管理 ──────────────────────────────────
 
     def _auto_init(self):
-        """启动时自动扫描并连接设备"""
-        self._log("正在扫描设备...")
-        init_default_devices()
+        """启动时自动扫描 MuMu 实例并连接"""
+        self._log("正在扫描 MuMu 实例...")
+        devices = init_all_devices()
+        names = [d["name"] for d in devices]
+        self._log(f"发现 {len(devices)} 个实例: {', '.join(names)}")
         self._refresh_device_list()
 
     def _on_refresh_devices(self):
         """手动刷新设备列表"""
-        found = scan_adb_devices()
-        self._log(f"发现 {len(found)} 个 ADB 设备: {found}")
+        self._log("正在重新扫描...")
+        devices = scan_available_devices()
+        # 重新连接
+        for d in devices:
+            if not d["connected"]:
+                import subprocess
+                subprocess.run([os.environ.get("ANDROID_ADB", "adb"), "connect", d["serial"]],
+                             capture_output=True, timeout=5)
+            connect_device_by_serial(d["name"], d["serial"])
         self._refresh_device_list()
+        names = [d["name"] for d in devices]
+        self._log(f"共 {len(devices)} 个实例: {', '.join(names)}")
 
     def _on_add_device(self):
         """添加新设备"""

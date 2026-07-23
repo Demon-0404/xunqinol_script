@@ -1,40 +1,119 @@
-"""多设备连接管理"""
+"""多设备连接管理 —— 自动读取 MuMu 多开配置"""
 import os
+import json
+import re
 import subprocess
 from airtest.core.api import connect_device, device as current_device, set_current
 
 
 MUMU_ADB = "D:/Setup_and_Downloads/Setup/MuMuPlayer/nx_main/adb.exe"
+MUMU_VMS_PATH = "D:/Setup_and_Downloads/Setup/MuMuPlayer/vms"
+
 if os.path.exists(MUMU_ADB):
     os.environ["ANDROID_ADB"] = MUMU_ADB
 
-# 预设设备（可手动添加）
-PRESET_DEVICES = [
-    {"name": "默认设备", "serial": "127.0.0.1:7555"},
-    {"name": "天音",     "serial": "127.0.0.1:7557"},
-]
-
-_devices = {}   # name -> {"serial": ..., "index": ..., "connected": bool}
+_devices = {}  # name -> {"serial": ..., "index": ..., "connected": bool}
 
 
-def scan_adb_devices() -> list[str]:
-    """扫描 ADB 发现的所有设备"""
+def _adb_path() -> str:
+    return os.environ.get("ANDROID_ADB", "adb")
+
+
+# ── MuMu 配置解析 ─────────────────────────────
+
+def _parse_mumu_instances() -> list[dict]:
+    """
+    从 MuMu 配置目录读取所有多开实例。
+    返回: [{"name": "天音", "index": 0, "dir": "..."}, ...]
+    """
+    instances = []
+    if not os.path.isdir(MUMU_VMS_PATH):
+        return instances
+
+    for entry in os.listdir(MUMU_VMS_PATH):
+        if not entry.startswith("MuMuPlayer-"):
+            continue
+        vm_dir = os.path.join(MUMU_VMS_PATH, entry)
+        extra_cfg = os.path.join(vm_dir, "configs", "extra_config.json")
+        if not os.path.exists(extra_cfg):
+            continue
+
+        try:
+            with open(extra_cfg, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            name = cfg.get("playerName", entry)
+            # 从目录名提取 index: MuMuPlayer-12.0-3 → 3
+            match = re.search(r"-(\d+)$", entry)
+            index = int(match.group(1)) if match else 0
+            instances.append({"name": name, "index": index, "dir": vm_dir})
+        except Exception:
+            pass
+
+    return sorted(instances, key=lambda x: x["index"])
+
+
+def _mumu_port(index: int) -> str:
+    """MuMu 12 端口映射: index 0→16384, index 1→16386, ..."""
+    return f"127.0.0.1:{16384 + index * 2}"
+
+
+def _try_connect(serial: str) -> bool:
+    """尝试通过 ADB connect 某个地址"""
     try:
         out = subprocess.run(
-            [os.environ.get("ANDROID_ADB", "adb"), "devices"],
-            capture_output=True, text=True, timeout=10
+            [_adb_path(), "connect", serial],
+            capture_output=True, text=True, timeout=5
         )
-        devices = []
+        return "connected" in out.stdout.lower() or "already" in out.stdout.lower()
+    except Exception:
+        return False
+
+
+# ── 公开 API ──────────────────────────────────
+
+def scan_available_devices() -> list[dict]:
+    """
+    扫描 MuMu 可连接的设备（自动从配置读取，不依赖用户手动输入端口）。
+    返回: [{"name": "天音", "serial": "127.0.0.1:16384", "connected": True}, ...]
+    """
+    result = []
+    instances = _parse_mumu_instances()
+
+    # 先快速 ADB 扫描一次获取已连接列表
+    online_serials = set()
+    try:
+        out = subprocess.run(
+            [_adb_path(), "devices"], capture_output=True, text=True, timeout=5
+        )
         for line in out.stdout.strip().split("\n")[1:]:
             if "\tdevice" in line:
-                devices.append(line.split("\t")[0])
-        return devices
+                online_serials.add(line.split("\t")[0])
     except Exception:
-        return []
+        pass
+
+    for inst in instances:
+        port = _mumu_port(inst["index"])
+        # 尝试连接
+        if port not in online_serials:
+            _try_connect(port)
+        # 检查是否在线
+        is_connected = port in online_serials
+        result.append({
+            "name": inst["name"], "serial": port, "connected": is_connected
+        })
+
+    # 如果没有从配置读到任何实例，回退：扫描常见端口
+    if not result:
+        for port in ["127.0.0.1:7555", "127.0.0.1:16384", "127.0.0.1:5555"]:
+            if _try_connect(port):
+                result.append({"name": f"设备{port}", "serial": port, "connected": True})
+                break
+
+    return result
 
 
 def connect_device_by_serial(name: str, serial: str) -> bool:
-    """连接指定 ADB 序列号的设备，并给一个名称"""
+    """连接指定序列号的设备"""
     try:
         uri = f"Android:///{serial}"
         dev = connect_device(uri)
@@ -47,14 +126,8 @@ def connect_device_by_serial(name: str, serial: str) -> bool:
         return False
 
 
-def disconnect_device(name: str):
-    """断开指定设备"""
-    if name in _devices:
-        del _devices[name]
-
-
 def switch_device(name: str) -> bool:
-    """切换到指定设备（后续所有 touch/swipe/snapshot 操作针对此设备）"""
+    """切换到指定设备"""
     if name not in _devices:
         print(f"设备 {name} 未连接")
         return False
@@ -63,26 +136,15 @@ def switch_device(name: str) -> bool:
 
 
 def list_devices() -> dict:
-    """返回所有已连接设备的信息"""
+    """返回所有已连接设备"""
     return {
         name: {"serial": d["serial"], "connected": d["connected"]}
         for name, d in _devices.items()
     }
 
 
-def get_current_device_name() -> str:
-    """返回当前活跃设备名"""
-    if not _devices:
-        return ""
-    idx = current_device()._instance_id if hasattr(current_device(), '_instance_id') else 0
-    for name, d in _devices.items():
-        if d["index"] == idx:
-            return name
-    return list(_devices.keys())[0] if _devices else ""
-
-
 def get_device_info(name: str = None) -> dict:
-    """获取指定设备信息"""
+    """获取设备分辨率"""
     if name and name in _devices:
         switch_device(name)
     try:
@@ -93,12 +155,13 @@ def get_device_info(name: str = None) -> dict:
         return {"width": 0, "height": 0, "connected": False}
 
 
-def init_default_devices():
-    """初始化预设设备列表（扫描 + 预设）"""
-    found = scan_adb_devices()
-    for preset in PRESET_DEVICES:
-        if preset["serial"] in found:
-            connect_device_by_serial(preset["name"], preset["serial"])
-    # 如果预设都没连上，尝试连找到的第一个
-    if not _devices and found:
-        connect_device_by_serial("设备1", found[0])
+def init_all_devices() -> list[dict]:
+    """
+    启动时调用：扫描所有 MuMu 实例并自动连接。
+    返回设备信息列表，供 UI 使用。
+    """
+    available = scan_available_devices()
+    for dev in available:
+        if dev["connected"] or _try_connect(dev["serial"]):
+            connect_device_by_serial(dev["name"], dev["serial"])
+    return available
