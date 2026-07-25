@@ -49,10 +49,24 @@ class BaseTask(ABC):
         try:
             self.run()
         except Exception as e:
-            self.log(f"任务异常: {e}")
+            import traceback, os
+            tb = traceback.format_exc()
+            self.log("任务异常: " + str(e))
+            for line in tb.split("\n"):
+                if line.strip():
+                    self.log("  " + line.strip())
+            # 写日志文件
+            try:
+                import os as _os
+                log_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "logs")
+                _os.makedirs(log_dir, exist_ok=True)
+                with open(_os.path.join(log_dir, "_task_error.txt"), "w", encoding="utf-8") as f:
+                    f.write(tb)
+            except Exception:
+                pass
         finally:
             self._running = False
-            self.log(f"{self.name} 已停止")
+            self.log(self.name + " 已停止")
 
     @abstractmethod
     def run(self):

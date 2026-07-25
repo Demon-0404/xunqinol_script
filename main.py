@@ -2,6 +2,7 @@
 import sys
 import os
 import io
+import subprocess
 # 修复 Airtest 内部 subprocess GBK 编码问题
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
@@ -9,6 +10,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='repla
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -221,33 +223,36 @@ class App:
                    command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "pet"))
                    ).pack(side=tk.RIGHT)
 
-    # ── 玄兵塔页 ─────────────────────────────────
+    # ── 玄兵塔页（宏录制模式）───────────────────
 
     def _build_tower_tab(self, notebook):
         tab = ttk.Frame(notebook, padding=8)
         notebook.add(tab, text="玄兵塔")
 
-        help_text = (
-            "进入百炼玄兵塔后启动。\n"
-            "自动检测黄色名字的怪物，逐个交战。\n"
-            "需要模板: templates/tower/\n"
-            "  enter_battle.png / battle_dialog.png / auto_btn.png / battle_end.png"
-        )
-        ttk.Label(tab, text=help_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+        # ── 模板匹配区 ──
+        ctrl = ttk.LabelFrame(tab, text="模板匹配自动清塔", padding=6)
+        ctrl.pack(fill=tk.X, pady=(0, 6))
 
-        ttk.Label(tab, text="每步等待(秒):").pack(anchor=tk.W)
-        self._tower_interval_var = tk.IntVar(value=2)
-        ttk.Spinbox(tab, from_=1, to=5, textvariable=self._tower_interval_var, width=4).pack(anchor=tk.W, pady=2)
-
-        bf = ttk.Frame(tab)
-        bf.pack(fill=tk.X, pady=(12, 0))
-        self._tower_start_btn = ttk.Button(bf, text="开始刷塔", command=self._on_start_tower)
+        c1 = ttk.Frame(ctrl)
+        c1.pack(fill=tk.X)
+        self._tower_start_btn = ttk.Button(c1, text="开始", command=self._on_start_tower)
         self._tower_start_btn.pack(side=tk.LEFT, padx=2)
-        self._tower_stop_btn = ttk.Button(bf, text="停止", command=self._on_stop_task, state=tk.DISABLED)
+        self._tower_stop_btn = ttk.Button(c1, text="停止", command=self._on_stop_task,
+                                          state=tk.DISABLED)
         self._tower_stop_btn.pack(side=tk.LEFT, padx=2)
-        ttk.Button(bf, text="打开模板目录",
-                   command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "tower"))
-                   ).pack(side=tk.RIGHT)
+
+        ttk.Label(c1, text="模板: templates/tower/names/  (monster_floor1_01~03 等)",
+                  foreground="gray").pack(side=tk.LEFT, padx=12)
+
+        # 说明
+        help_text = (
+            "流程: 模板匹配怪物名字 → 走过去 → 进入战斗 → 自动 → 等结算 → 下一只\n"
+            "需要模板:\n"
+            "  names/monster_floorX_XX.png —— 怪物名字截图\n"
+            "  enter_battle.png / auto_btn.png / battle_end.png —— UI 元素\n"
+            "  next_floor.png —— 传送NPC (可选)"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 0))
 
     # ── 打泼猴页 ─────────────────────────────────
 
@@ -263,9 +268,9 @@ class App:
         )
         ttk.Label(tab, text=help_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=4)
 
-        ttk.Label(tab, text="对话后等待(秒):").pack(anchor=tk.W)
-        self._monkey_wait_var = tk.IntVar(value=8)
-        ttk.Spinbox(tab, from_=1, to=30, textvariable=self._monkey_wait_var, width=4).pack(anchor=tk.W, pady=2)
+        ttk.Label(tab, text="战斗等待(秒):").pack(anchor=tk.W)
+        self._monkey_wait_var = tk.DoubleVar(value=4.4)
+        ttk.Spinbox(tab, from_=1, to=30, increment=0.1, textvariable=self._monkey_wait_var, width=5).pack(anchor=tk.W, pady=2)
 
         bf = ttk.Frame(tab)
         bf.pack(fill=tk.X, pady=(12, 0))
@@ -459,7 +464,7 @@ class App:
             return
         switch_device(dev)
         task = MonkeyTask()
-        task.WAIT_AFTER_OPTION = self._monkey_wait_var.get()
+        task.WAIT_BATTLE = self._monkey_wait_var.get()
         self._current_task = task
         self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
         self._current_task.start()
@@ -472,13 +477,13 @@ class App:
         if self._current_task:
             self._current_task.stop()
         for b in [self._walk_start_btn, self._quest_start_btn,
-                  self._dung_start_btn, self._pet_start_btn, self._tower_start_btn,
-                  self._monkey_start_btn]:
+                  self._dung_start_btn, self._pet_start_btn,
+                  self._monkey_start_btn, self._tower_start_btn]:
             try: b.config(state=tk.NORMAL)
             except: pass
         for b in [self._walk_stop_btn, self._quest_stop_btn,
-                  self._dung_stop_btn, self._pet_stop_btn, self._tower_stop_btn,
-                  self._monkey_stop_btn]:
+                  self._dung_stop_btn, self._pet_stop_btn,
+                  self._monkey_stop_btn, self._tower_stop_btn]:
             try: b.config(state=tk.DISABLED)
             except: pass
 
@@ -487,9 +492,19 @@ class App:
         if not dev:
             self._log("错误: 请先添加设备!")
             return
-        switch_device(dev)
+        ok = switch_device(dev)
+        if not ok:
+            self._log(f"错误: 切换到设备 {dev} 失败!")
+            return
         from core.actions import screenshot
+        from airtest.core.api import device as cur_dev
         import time
+        # 验证当前设备
+        try:
+            cur = cur_dev()
+            self._log(f"当前设备: {cur}")
+        except:
+            pass
         name = f"screenshot_{dev}_{time.strftime('%Y%m%d_%H%M%S')}.png"
         path = os.path.join(BASE_DIR, "logs", name)
         screenshot(path)
