@@ -69,7 +69,7 @@ def _fuzzy_match(ocr_text: str, candidates: list[str]) -> str | None:
             return c
     for c in candidates:
         common = sum(1 for ch in ocr_text if ch in c)
-        if common >= 2 and common >= len(c) * 0.5:
+        if common >= 1 and common >= len(c) * 0.5:
             return c
     return None
 
