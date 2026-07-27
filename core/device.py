@@ -93,6 +93,20 @@ def scan_available_devices() -> list[dict]:
     except Exception:
         pass
 
+    # 单实例 MuMu 回退：始终尝试连接默认端口 7555
+    if "127.0.0.1:7555" not in online_serials:
+        _try_connect("127.0.0.1:7555")
+        try:
+            out = subprocess.run(
+                [_adb_path(), "devices"], capture_output=True, text=True, timeout=5,
+                encoding="utf-8", errors="replace"
+            )
+            for line in out.stdout.strip().split("\n")[1:]:
+                if "\tdevice" in line:
+                    online_serials.add(line.split("\t")[0])
+        except Exception:
+            pass
+
     has_7555 = "127.0.0.1:7555" in online_serials
 
     for inst in instances:

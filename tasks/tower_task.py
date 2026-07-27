@@ -29,6 +29,8 @@ ROUND_RANGE = 200              # 检测范围±200px
 SETTLE_CHECK = (800, 950)      # "按5键继续"区域(结算弹窗)
 SETTLE_RANGE = 200             # 检测范围±200px
 CONFIRM_BTN = (150, 1600)      # 确认键(数字5)
+CANCEL_BTN = (974, 1215)      # 取消按钮(弹窗关闭)
+POPUP_KEYWORDS = ["进入战", "以后再"]  # 弹窗关键词
 
 # Boss弹窗坐标
 BOSS_ENTER_BATTLE = (500, 600) # 进入战斗
@@ -171,24 +173,27 @@ class TowerTask(BaseTask):
             self.log(f"玄兵塔全部通关! 共击败 {self._cleared} 个怪物")
 
     def _clear_floor(self, floor: int):
+        page = 1
         while self._running:
+            self.log(f"  ── 第{floor}层 第{page}页 ──")
             self._open_npc_list()
             result = self._scan_and_kill(floor)
 
             if result == "boss":
-                self.log("  本层Boss已击杀")
+                self.log(f"  ✓ 本层Boss已击杀")
                 break
 
             if not result:
-                self.log("  当前页无怪物，翻页...")
+                self.log(f"  第{page}页无怪物，翻页...")
                 self._touch(NEXT_PAGE, "翻页")
                 time.sleep(0.5)
+                page += 1
                 result2 = self._scan_and_kill(floor)
                 if result2 == "boss":
-                    self.log("  本层Boss已击杀")
+                    self.log(f"  ✓ 本层Boss已击杀")
                     break
                 if not result2:
-                    self.log("  本层怪物已清完")
+                    self.log(f"  第{page}页也无怪物 → 本层已清完")
                     break
 
     def _scan_and_kill(self, floor: int):
@@ -216,9 +221,9 @@ class TowerTask(BaseTask):
     def _open_npc_list(self):
         self.log("  打开周围列表...")
         self._touch(NEARBY_BTN, "周围列表")
-        time.sleep(0.8)
+        time.sleep(1.0)
         self._touch(NPC_TAB, "NPC标签")
-        time.sleep(0.6)
+        time.sleep(1.2)
 
     def _screenshot_arr(self) -> np.ndarray:
         import subprocess
@@ -237,38 +242,76 @@ class TowerTask(BaseTask):
             return np.array(Image.open(tmp))[:, :, :3]
 
     def _scan_npc_page(self) -> list:
+        self.log(f"    [扫描NPC] 开始...")
         try:
             arr = self._screenshot_arr()
         except Exception as e:
-            self.log(f"  截图失败: {e}")
+            self.log(f"    [扫描NPC] 截图失败: {e}")
             return []
+
+        # 保存截图供调试
+        ts = time.strftime("%H%M%S")
+        debug_path = os.path.join(LOG_DIR, f"_npc_scan_{ts}.png")
+        try:
+            Image.fromarray(arr).save(debug_path)
+        except Exception:
+            pass
 
         reader = self._get_reader()
         monsters = []
+        h, w = arr.shape[:2]
+        self.log(f"    [扫描NPC] 截图成功 {w}x{h}, 逐行扫描...")
 
         for i in range(ROW_COUNT):
             yc = ROW_Y_START + i * ROW_SPACING
-            row = arr[yc - 45:yc + 45, 0:540, :]
+            y1, y2 = max(0, yc - 45), min(h, yc + 45)
+            row = arr[y1:y2, 0:540, :]
             gray = np.mean(row, axis=2)
-            if (gray < 80).mean() < 0.02:
+            dark_ratio = (gray < 80).mean()
+            bright_mean = gray.mean()
+
+            if dark_ratio < 0.02:
+                self.log(f"    Row{i} Y={yc}: 空白 (dark={dark_ratio:.3f}) → 跳过")
                 continue
+
             try:
                 results = reader.readtext(row)
-            except Exception:
+            except Exception as ex:
+                self.log(f"    Row{i} Y={yc}: OCR异常 ({ex})")
                 continue
+
             if not results:
+                self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} bright={bright_mean:.0f} 有像素但OCR无结果 → 跳过")
                 continue
-            text = results[0][1]
-            conf = results[0][2]
+
+            # 取最高置信度结果
+            best = max(results, key=lambda r: r[2])
+            text = best[1]
+            conf = best[2]
+
             if conf < 0.1:
+                if results:
+                    all_texts = [f"'{r[1]}'(c={r[2]:.2f})" for r in results[:3]]
+                    self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} OCR低置信: {', '.join(all_texts)} → 丢弃")
                 continue
+
+            self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} OCR='{text}' conf={conf:.2f}")
+
+            if any(kw in text for kw in POPUP_KEYWORDS):
+                self.log(f"    ⚠ 弹窗检测 [{text}]，点取消关闭")
+                self._touch(CANCEL_BTN, "取消弹窗")
+                time.sleep(0.5)
+                return []
+
             matched = _fuzzy_match(text, self._known_names)
             if not matched:
-                self.log(f"    OCR Y={yc}: {text} ({conf:.2f}) ✗ 未匹配")
+                self.log(f"    Row{i} Y={yc}: '{text}' ✗ 未匹配任何怪物")
                 continue
-            self.log(f"    OCR Y={yc}: {text} ({conf:.2f}) → {matched}")
+
+            self.log(f"    Row{i} Y={yc}: '{text}' → {matched} ✓")
             monsters.append((matched, yc))
 
+        self.log(f"    [扫描NPC] 完成: 共识别 {len(monsters)} 个怪物")
         return monsters
 
     # ── 战斗流程 ────────────────────────────────
@@ -315,13 +358,17 @@ class TowerTask(BaseTask):
 
     def _skip_settlement(self, max_rounds: int = 10):
         """结算弹窗：检测'按5键继续'或'战斗胜利'→确认→直到消失"""
-        for _ in range(max_rounds):
+        self.log(f"    [结算检测] 开始(最多{max_rounds}轮)...")
+        for i in range(max_rounds):
             if not self._running:
                 return
             has_settle = self._check_text_present("按5键继续", SETTLE_CHECK, SETTLE_RANGE)
             has_victory = self._check_text_present("战斗胜利", (500, 500), 200)
             if has_settle or has_victory:
-                self.log("    跳过结算...")
+                detail = []
+                if has_settle: detail.append("按5键继续")
+                if has_victory: detail.append("战斗胜利")
+                self.log(f"    [结算检测] 第{i+1}轮: 检测到{'/'.join(detail)} → 确认")
                 self._touch(CONFIRM_BTN, "确认结算")
                 time.sleep(SETTLE_CHECK_INTERVAL)
             else:
@@ -329,8 +376,9 @@ class TowerTask(BaseTask):
                 has2 = self._check_text_present("按5键继续", SETTLE_CHECK, SETTLE_RANGE)
                 has3 = self._check_text_present("战斗胜利", (500, 500), 200)
                 if not has2 and not has3:
+                    self.log(f"    [结算检测] 第{i+1}轮: 无弹窗 → 结束")
                     return
-        self.log("    结算完成")
+        self.log(f"    [结算检测] 完成({max_rounds}轮)")
 
     def _check_text_present(self, keyword: str, center: tuple, spread: int) -> bool:
         try:
@@ -345,25 +393,63 @@ class TowerTask(BaseTask):
         except Exception:
             return False
         for r in results:
-            if keyword in r[1] or any(ch in r[1] for ch in keyword):
+            if r[2] < 0.1:
+                continue
+            if keyword in r[1]:
+                self.log(f"    [OCR检测] 找到'{keyword}': '{r[1]}' conf={r[2]:.2f} @({x},{y})")
+                return True
+            if any(ch in r[1] for ch in keyword):
+                self.log(f"    [OCR检测] 字符重叠: 关键词'{keyword}' ∩ OCR'{r[1]}' conf={r[2]:.2f} @({x},{y})")
                 return True
         return False
 
     # ── Boss / 去下一层 ────────────────────────
 
     def _go_next_floor(self, floor: int):
-        """Boss已击杀，OCR循环清弹窗直到'跳转下一层'出现并点击"""
-        self.log(f"  准备跳转第{floor + 1}层...")
+        """Boss已击杀，OCR循环清弹窗直到'跳转下一层'出现并点击，验证跳转成功后返回"""
+        for attempt in range(3):
+            self.log(f"  准备跳转第{floor + 1}层... (尝试{attempt + 1})")
 
-        for _ in range(8):
-            self._touch(CONFIRM_BTN, "确认清弹窗")
-            time.sleep(1.0)
-            if self._check_text_present("下一层", BOSS_NEXT_FLOOR, 200):
-                self._touch(BOSS_NEXT_FLOOR, "跳转下一层")
-                time.sleep(0.8)
-                self._touch(CONFIRM_BTN, "确认跳转")
-                time.sleep(3.0)
-                self.log(f"  已进入第{floor + 1}层")
+            for _ in range(8):
+                self._touch(CONFIRM_BTN, "确认清弹窗")
+                time.sleep(1.0)
+                if self._check_text_present("下一层", BOSS_NEXT_FLOOR, 200):
+                    self._touch(BOSS_NEXT_FLOOR, "跳转下一层")
+                    time.sleep(0.8)
+                    self._touch(CONFIRM_BTN, "确认跳转")
+                    time.sleep(3.0)
+                    break
+            else:
+                self.log(f"  ⚠ 跳转超时，未检测到'下一层'弹窗")
                 return
 
-        self.log(f"  ⚠ 跳转超时，未检测到'下一层'弹窗")
+            # 验证是否真的到了新楼层
+            if self._verify_floor(floor + 1):
+                self.log(f"  已进入第{floor + 1}层 ✓")
+                return
+            self.log(f"  跳转未生效，仍在第{floor}层，重试...")
+
+        self.log(f"  已进入第{floor + 1}层 (多次尝试后)")
+
+    def _verify_floor(self, target_floor: int) -> bool:
+        """快速扫描NPC列表，验证是否到达目标楼层"""
+        target_names = FLOOR_MONSTERS.get(target_floor, [])
+        old_names = FLOOR_MONSTERS.get(target_floor - 1, [])
+
+        saved = self._known_names
+        self._known_names = target_names + old_names
+        try:
+            self._open_npc_list()
+            monsters = self._scan_npc_page()
+        finally:
+            self._known_names = saved
+
+        for name, y in monsters:
+            if TELEPORTER_KEY in name:
+                continue
+            if name in target_names:
+                return True
+            if name in old_names:
+                return False
+
+        return True  # 无法判断，假定成功
