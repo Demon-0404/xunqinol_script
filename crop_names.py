@@ -25,7 +25,7 @@ if not devices:
     print("未发现设备！")
     sys.exit(1)
 target = devices[0]
-ok = connect_device_by_serial(target["name"], target["serial"])
+ok, _ = connect_device_by_serial(target["name"], target["serial"])
 if not ok:
     print("连接失败！")
     sys.exit(1)

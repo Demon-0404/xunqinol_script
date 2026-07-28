@@ -15,7 +15,7 @@ if not online:
     print("没有在线设备!"); sys.exit(1)
 port = "127.0.0.1:7555" if "127.0.0.1:7555" in online else online[0]
 
-ok = connect_device_by_serial("设备", port)
+ok, _ = connect_device_by_serial("设备", port)
 switch_device("设备")
 print(f"已连接 {port}")
 

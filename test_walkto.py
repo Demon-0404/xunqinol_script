@@ -29,7 +29,7 @@ if want:
             break
 if not target:
     target = {"name": "设备", "serial": online[0]}
-ok = connect_device_by_serial(target["name"], target["serial"])
+ok, _ = connect_device_by_serial(target["name"], target["serial"])
 switch_device(target["name"])
 print(f"已连接 {target['name']}")
 

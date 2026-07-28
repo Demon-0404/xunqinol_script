@@ -46,7 +46,7 @@ else:
     port = online[0] if online else "127.0.0.1:7555"
     target = {"name": "设备", "serial": port}
 
-ok = connect_device_by_serial(target["name"], target["serial"])
+ok, _ = connect_device_by_serial(target["name"], target["serial"])
 switch_device(target["name"])
 print(f"已连接 {target['name']}")
 

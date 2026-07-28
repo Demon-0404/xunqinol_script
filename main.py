@@ -324,12 +324,12 @@ class App:
         self._connect_btn.config(state=tk.DISABLED)
 
         def _do():
-            ok = connect_device_by_serial(name, serial)
-            self.root.after(0, lambda: self._on_connect_done(name, ok))
+            ok, err = connect_device_by_serial(name, serial)
+            self.root.after(0, lambda: self._on_connect_done(name, ok, err))
 
         threading.Thread(target=_do, daemon=True).start()
 
-    def _on_connect_done(self, name: str, ok: bool):
+    def _on_connect_done(self, name: str, ok: bool, err: str = ""):
         self._connect_btn.config(state=tk.NORMAL)
         if ok:
             switch_device(name)
@@ -338,7 +338,7 @@ class App:
             self._log(f"{name} 连接成功 ({info['width']}x{info['height']})")
         else:
             self._status_label.config(text="连接失败", foreground="red")
-            self._log(f"{name} 连接失败")
+            self._log(f"{name} 连接失败: {err}")
 
     def _refresh_device_list(self):
         """刷新设备下拉列表"""

@@ -3,7 +3,7 @@ import os
 import json
 import re
 import subprocess
-from airtest.core.api import connect_device, device as current_device, set_current
+from airtest.core.api import connect_device, device as current_device
 
 
 MUMU_ADB = "D:/Setup_and_Downloads/Setup/MuMuPlayer/nx_main/adb.exe"
@@ -132,27 +132,50 @@ def scan_available_devices() -> list[dict]:
     return result
 
 
-def connect_device_by_serial(name: str, serial: str) -> bool:
-    """连接指定序列号的设备"""
+def connect_device_by_serial(name: str, serial: str) -> tuple[bool, str]:
+    """连接指定序列号的设备，返回 (成功, 错误信息)"""
+    import traceback
     try:
+        # 如果已有不同 serial 的设备连接，先用 ADB 断开旧连接
+        for ename, info in list(_devices.items()):
+            old_serial = info.get("serial", "")
+            if old_serial and old_serial != serial and info.get("connected"):
+                subprocess.run(
+                    [_adb_path(), "disconnect", old_serial],
+                    capture_output=True, timeout=3
+                )
+                info["connected"] = False
+
+        # 确保 ADB 已连接
+        _try_connect(serial)
+
         uri = f"Android:///{serial}"
-        dev = connect_device(uri)
-        index = len(_devices)
-        _devices[name] = {"serial": serial, "index": index, "connected": True}
-        return True
+        connect_device(uri)
+        _devices[name] = {"serial": serial, "connected": True}
+        return True, ""
     except Exception as e:
-        _devices[name] = {"serial": serial, "index": -1, "connected": False}
-        print(f"连接 {name} ({serial}) 失败: {e}")
-        return False
+        _devices[name] = {"serial": serial, "connected": False}
+        err = f"连接失败: {e}"
+        print(err)
+        traceback.print_exc()
+        return False, err
 
 
 def switch_device(name: str) -> bool:
-    """切换到指定设备"""
+    """切换到指定设备 —— 直接用 connect_device 切换（airtest 不支持多设备 set_current）"""
     if name not in _devices:
         print(f"设备 {name} 未连接")
         return False
-    set_current(_devices[name]["index"])
-    return True
+    info = _devices[name]
+    if not info.get("connected"):
+        return False
+    try:
+        uri = f"Android:///{info['serial']}"
+        connect_device(uri)
+        return True
+    except Exception as e:
+        print(f"切换设备失败: {e}")
+        return False
 
 
 def list_devices() -> dict:

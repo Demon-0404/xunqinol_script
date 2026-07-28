@@ -54,7 +54,7 @@ if want_device:
     elif port not in online:
         print(f"设备 {target['name']} 不在线 ({port})，尝试 7555...")
         port = "127.0.0.1:7555"
-    ok = connect_device_by_serial(target["name"], port)
+    ok, _ = connect_device_by_serial(target["name"], port)
     if not ok:
         print(f"连接失败！")
         sys.exit(1)
