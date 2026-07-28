@@ -26,6 +26,8 @@ TELEPORTER_KEY = "传送师"
 # 战斗检测坐标
 ROUND_CHECK = (500, 200)       # 回合文字区域(战斗中可见)
 ROUND_RANGE = 200              # 检测范围±200px
+BATTLE_MODE_CHECK = (1000, 1450)  # 自动/手动按钮区域(战斗中可见)
+BATTLE_MODE_RANGE = 100           # 检测范围±100px
 SETTLE_CHECK = (800, 950)      # "按5键继续"区域(结算弹窗)
 SETTLE_RANGE = 200             # 检测范围±200px
 CONFIRM_BTN = (150, 1600)      # 确认键(数字5)
@@ -37,6 +39,10 @@ CANCEL_PANELS = [
     (950, 1200),   # 进入战斗面板
     (950, 1450),   # 聊天记录面板
 ]
+
+# NPC列表面板验证坐标
+PANEL_TITLE_CHECK = (500, 100)   # 顶部中央，检测"周围列表"标题
+PANEL_TITLE_SPREAD = 200          # 检测范围
 
 # Boss弹窗坐标
 BOSS_ENTER_BATTLE = (500, 600) # 进入战斗
@@ -234,14 +240,50 @@ class TowerTask(BaseTask):
                 return True
         return False
 
+    def _verify_npc_panel(self) -> bool:
+        """检查NPC列表面板是否已正确打开（顶部中央应有'周围列表'字样）"""
+        # 先检测正确的NPC列表标题
+        if self._check_text_at("周围列表", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
+            self.log("  [面板验证] '周围列表'已打开 ✓")
+            return True
+
+        # 不是周围列表 —— 检查是不是误开面板（有关闭按钮）
+        wrong_type = None
+        if self._check_text_at("聊天记录", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
+            wrong_type = "聊天记录"
+        elif self._check_text_at("备忘", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
+            wrong_type = "备忘"
+
+        if wrong_type:
+            self.log(f"  [面板验证] 检测到'{wrong_type}'，非NPC列表!")
+            # 尝试找取消按钮关闭
+            dismissed = self._dismiss_panels()
+            if dismissed:
+                self.log(f"  [面板验证] 已关闭'{wrong_type}'面板")
+            else:
+                self.log(f"  [面板验证] 未找到取消按钮，无法关闭")
+            return False
+
+        # 没检测到任何标题，可能是加载中/其他状态
+        self.log("  [面板验证] 未检测到面板标题")
+        return False
+
     def _open_npc_list(self):
-        # 先检查并关闭误开的面板
-        self._dismiss_panels()
-        self.log("  打开周围列表...")
-        self._touch(NEARBY_BTN, "周围列表")
-        time.sleep(1.0)
-        self._touch(NPC_TAB, "NPC标签")
-        time.sleep(1.2)
+        for retry in range(3):
+            # 先关闭可能阻塞的弹窗/误开面板
+            if self._dismiss_panels():
+                time.sleep(0.3)
+            self.log(f"  打开周围列表... (尝试{retry+1}/3)")
+            self._touch(NEARBY_BTN, "周围列表")
+            time.sleep(1.0)
+            self._touch(NPC_TAB, "NPC标签")
+            time.sleep(1.2)
+
+            if self._verify_npc_panel():
+                return
+            self.log(f"  NPC面板未正确打开，重试...")
+
+        self.log("  ⚠ NPC面板多次重试失败，继续尝试扫描")
 
     def _screenshot_arr(self) -> np.ndarray:
         import subprocess
@@ -263,13 +305,75 @@ class TowerTask(BaseTask):
             except Exception:
                 return np.array(Image.open(tmp))[:, :, :3]
 
+    def _auto_correct_floor(self, monsters: list) -> int | None:
+        """统计怪物属于哪层最多，若与当前层不同则自动纠正"""
+        floor_votes = {}
+        # 对每个OCR识别到的名字，找最佳匹配的楼层
+        for ocr_name, y in monsters:
+            if TELEPORTER_KEY in ocr_name:
+                continue
+            best_floor = None
+            best_score = 0
+            for floor, names in FLOOR_MONSTERS.items():
+                # 严格匹配：exact > substring > 字符重叠（需更高阈值）
+                score = 0
+                if ocr_name in names:
+                    score = 3  # 精确匹配
+                else:
+                    for c in names:
+                        if ocr_name in c or c in ocr_name:
+                            score = 2  # 子串匹配
+                            break
+                    if score == 0:
+                        for c in names:
+                            common = sum(1 for ch in ocr_name if ch in c)
+                            if common >= 2 and common >= len(c) * 0.6:
+                                score = 1  # 字符重叠（弱匹配）
+                                break
+                if score > best_score:
+                    best_score = score
+                    best_floor = floor
+            if best_floor and best_score >= 1:
+                floor_votes[best_floor] = floor_votes.get(best_floor, 0) + 1
+
+        if not floor_votes:
+            return None
+
+        best_floor = max(floor_votes, key=floor_votes.get)
+        best_count = floor_votes[best_floor]
+        total = len([m for m in monsters if TELEPORTER_KEY not in m[0]])
+
+        self.log(f"    [楼层投票] {dict(sorted(floor_votes.items()))}  total={total}")
+
+        # 需要绝对多数（>50%）才纠正
+        if best_count > total // 2:
+            current = None
+            for f, names in FLOOR_MONSTERS.items():
+                if names == self._known_names:
+                    current = f
+                    break
+            if current is not None and best_floor != current:
+                self.log(f"    [楼层纠正] 第{current}层 → 第{best_floor}层 (投票{best_count}/{total})")
+                self._known_names = FLOOR_MONSTERS.get(best_floor, self._known_names)
+                return best_floor
+        return None
+
     def _scan_npc_page(self) -> list:
         self.log(f"    [扫描NPC] 开始...")
-        try:
-            arr = self._screenshot_arr()
-        except Exception as e:
-            self.log(f"    [扫描NPC] 截图失败: {e}")
-            return []
+        for retry in range(3):
+            try:
+                arr = self._screenshot_arr()
+            except Exception as e:
+                self.log(f"    [扫描NPC] 截图失败: {e}")
+                return []
+
+            # 检测画面过暗（加载/黑屏），等0.5秒重试
+            mean_bright = float(np.mean(arr))
+            if mean_bright < 100 and retry < 2:
+                self.log(f"    [扫描NPC] 画面过暗(mean={mean_bright:.0f})，等待重试({retry+1}/2)...")
+                time.sleep(0.5)
+                continue
+            break
 
         # 保存截图供调试
         ts = time.strftime("%H%M%S")
@@ -333,6 +437,20 @@ class TowerTask(BaseTask):
             self.log(f"    Row{i} Y={yc}: '{text}' → {matched} ✓")
             monsters.append((matched, yc))
 
+        # ── 智能楼层纠错 ──
+        if monsters:
+            corrected = self._auto_correct_floor(monsters)
+            if corrected:
+                # 用纠正后的楼层重新匹配
+                self.log(f"    [扫描NPC] 楼层已纠正为第{corrected}层，重新匹配...")
+                new_monsters = []
+                for name, yc in monsters:
+                    rematched = _fuzzy_match(name, FLOOR_MONSTERS.get(corrected, []))
+                    if rematched:
+                        new_monsters.append((rematched, yc))
+                        self.log(f"      '{name}' → {rematched} ✓")
+                monsters = new_monsters
+
         self.log(f"    [扫描NPC] 完成: 共识别 {len(monsters)} 个怪物")
         return monsters
 
@@ -359,22 +477,56 @@ class TowerTask(BaseTask):
         time.sleep(1.0)
         self._touch(CONFIRM_BTN, "跳过对话")
 
-        # 等待进入战斗
-        time.sleep(1.5)
-        if self._check_text_present("回合", ROUND_CHECK, ROUND_RANGE):
-            self.log("    进入战斗!")
-            self.log(f"    战斗中...")
-            self._wait_for_round_disappear()
+        # 等待进入战斗（循环检测，最多等3秒）
+        for _ in range(6):
+            time.sleep(0.5)
+            if self._is_in_battle():
+                self.log("    进入战斗!")
+                self.log(f"    战斗中...")
+                self._wait_for_round_disappear()
+                break
 
         # 跳过结算弹窗
         self._skip_settlement()
 
+    def _is_in_battle(self) -> bool:
+        """检测是否在战斗中：回合文字 或 自动/手动按钮（一次截图，减少耗时）"""
+        try:
+            arr = self._screenshot_arr()
+        except Exception:
+            return False
+        h, w = arr.shape[:2]
+        reader = self._get_reader()
+
+        checks = [
+            ("回合", ROUND_CHECK, ROUND_RANGE),
+            ("自动", BATTLE_MODE_CHECK, BATTLE_MODE_RANGE),
+            ("手动", BATTLE_MODE_CHECK, BATTLE_MODE_RANGE),
+        ]
+        for keyword, (cx, cy), spread in checks:
+            y1, y2 = max(0, cy - spread), min(h, cy + spread)
+            x1, x2 = max(0, cx - spread), min(w, cx + spread)
+            crop = arr[y1:y2, x1:x2, :]
+            try:
+                results = reader.readtext(crop)
+            except Exception:
+                continue
+            for r in results:
+                if r[2] >= 0.1 and keyword in r[1]:
+                    return True
+        return False
+
     def _wait_for_round_disappear(self, timeout: float = 120.0):
         start = time.time()
+        miss_count = 0
         while time.time() - start < timeout and self._running:
-            if not self._check_text_present("回合", ROUND_CHECK, ROUND_RANGE):
-                self.log("    战斗结束!")
-                return True
+            if not self._is_in_battle():
+                miss_count += 1
+                if miss_count >= 4:  # 连续2秒没检测到才确认结束
+                    self.log("    战斗结束!")
+                    return True
+            else:
+                miss_count = 0
             time.sleep(BATTLE_CHECK_INTERVAL)
         return False
 
@@ -408,8 +560,11 @@ class TowerTask(BaseTask):
             arr = self._screenshot_arr()
         except Exception:
             return False
+        h, w = arr.shape[:2]
         x, y = center
-        crop = arr[y - spread:y + spread, x - spread:x + spread, :]
+        y1, y2 = max(0, y - spread), min(h, y + spread)
+        x1, x2 = max(0, x - spread), min(w, x + spread)
+        crop = arr[y1:y2, x1:x2, :]
         reader = self._get_reader()
         try:
             results = reader.readtext(crop)
@@ -425,8 +580,11 @@ class TowerTask(BaseTask):
             arr = self._screenshot_arr()
         except Exception:
             return False
+        h, w = arr.shape[:2]
         x, y = center
-        crop = arr[y - spread:y + spread, x - spread:x + spread, :]
+        y1, y2 = max(0, y - spread), min(h, y + spread)
+        x1, x2 = max(0, x - spread), min(w, x + spread)
+        crop = arr[y1:y2, x1:x2, :]
         reader = self._get_reader()
         try:
             results = reader.readtext(crop)
