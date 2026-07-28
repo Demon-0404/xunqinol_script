@@ -32,6 +32,12 @@ CONFIRM_BTN = (150, 1600)      # 确认键(数字5)
 CANCEL_BTN = (974, 1215)      # 取消按钮(弹窗关闭)
 POPUP_KEYWORDS = ["进入战", "以后再"]  # 弹窗关键词
 
+# 误开面板关闭坐标（需OCR确认"取消"存在后才点击）
+CANCEL_PANELS = [
+    (950, 1200),   # 进入战斗面板
+    (950, 1450),   # 聊天记录面板
+]
+
 # Boss弹窗坐标
 BOSS_ENTER_BATTLE = (500, 600) # 进入战斗
 BOSS_NEXT_FLOOR = (500, 730)   # 跳转下一层
@@ -49,7 +55,7 @@ FLOOR_MONSTERS = {
         "长生根", "伤不旗", "逆鳞枪", "宝莲灯"],
     3: ["万里起云烟", "钻心钉", "万鸦壶", "紫金钵", "定风珠", "鬼神甲",
         "穿天弩", "咆哮梯", "金光锉", "五行旗"],
-    4: ["乱心尘", "阴阳二气瓶", "劈地珠", "杏黄旗", "刃", "穿心锁",
+    4: ["乱心尘", "阴阳二气瓶", "劈地珠", "杏黄旗", "阴阳刃", "穿心锁",
         "三尖两刃枪", "浮云", "金霞冠", "伏羲琴"],
     5: ["落魂钟", "焰光旗", "化血神刀", "日月珠", "定海珠", "破军",
         "开天珠", "火星帖", "混元锤", "翻天印"],
@@ -218,7 +224,19 @@ class TowerTask(BaseTask):
 
     # ── NPC列表 ────────────────────────────────
 
+    def _dismiss_panels(self) -> bool:
+        """检测并关闭误打开的面板（进入战斗/聊天记录），返回是否关闭了面板"""
+        for cx, cy in CANCEL_PANELS:
+            if self._check_text_at("取消", (cx, cy), 100):
+                self.log(f"  检测到误开面板 @({cx},{cy})，点击取消关闭")
+                self._touch((cx, cy), "关闭误开面板")
+                time.sleep(0.5)
+                return True
+        return False
+
     def _open_npc_list(self):
+        # 先检查并关闭误开的面板
+        self._dismiss_panels()
         self.log("  打开周围列表...")
         self._touch(NEARBY_BTN, "周围列表")
         time.sleep(1.0)
@@ -227,19 +245,23 @@ class TowerTask(BaseTask):
 
     def _screenshot_arr(self) -> np.ndarray:
         import subprocess
+        adb = os.environ.get("ANDROID_ADB", "adb")
+        tmp = os.path.join(LOG_DIR, "_tower_tmp.png")
+        # 优先用 adb screencap（画质好，OCR更准），失败了再降级到 airtest snapshot
         try:
-            filename = snapshot()
-            if filename is None:
-                raise RuntimeError("snapshot returned None")
-            return np.array(Image.open(filename))[:, :, :3]
-        except Exception:
-            adb = os.environ.get("ANDROID_ADB", "adb")
-            tmp = os.path.join(LOG_DIR, "_tower_tmp.png")
             subprocess.run([adb, "shell", "screencap", "-p", "/sdcard/sc.png"],
                            capture_output=True, timeout=5)
             subprocess.run([adb, "pull", "/sdcard/sc.png", tmp],
                            capture_output=True, timeout=5)
             return np.array(Image.open(tmp))[:, :, :3]
+        except Exception:
+            try:
+                filename = snapshot()
+                if filename is None:
+                    raise RuntimeError("snapshot returned None")
+                return np.array(Image.open(filename))[:, :, :3]
+            except Exception:
+                return np.array(Image.open(tmp))[:, :, :3]
 
     def _scan_npc_page(self) -> list:
         self.log(f"    [扫描NPC] 开始...")
@@ -275,7 +297,7 @@ class TowerTask(BaseTask):
                 continue
 
             try:
-                results = reader.readtext(row)
+                results = reader.readtext(row, mag_ratio=2)
             except Exception as ex:
                 self.log(f"    Row{i} Y={yc}: OCR异常 ({ex})")
                 continue
@@ -379,6 +401,24 @@ class TowerTask(BaseTask):
                     self.log(f"    [结算检测] 第{i+1}轮: 无弹窗 → 结束")
                     return
         self.log(f"    [结算检测] 完成({max_rounds}轮)")
+
+    def _check_text_at(self, keyword: str, center: tuple, spread: int) -> bool:
+        """检查指定坐标周围是否存在指定文字（conf>=0.1）"""
+        try:
+            arr = self._screenshot_arr()
+        except Exception:
+            return False
+        x, y = center
+        crop = arr[y - spread:y + spread, x - spread:x + spread, :]
+        reader = self._get_reader()
+        try:
+            results = reader.readtext(crop)
+        except Exception:
+            return False
+        for r in results:
+            if r[2] >= 0.1 and keyword in r[1]:
+                return True
+        return False
 
     def _check_text_present(self, keyword: str, center: tuple, spread: int) -> bool:
         try:
