@@ -24,6 +24,8 @@ from tasks.flow_task import FlowTask
 from tasks.tower_task import TowerTask
 from tasks.monkey_task import MonkeyTask
 from frida_blood.monitor import BloodMonitor
+from tasks.dungeon_task import DungeonTask
+from tasks.crystal_task import CrystalTask
 
 
 class App:
@@ -76,6 +78,7 @@ class App:
         self._build_walk_tab(notebook)
         self._build_quest_tab(notebook)
         self._build_dungeon_tab(notebook)
+        self._build_crystal_tab(notebook)
         self._build_pet_tab(notebook)
         self._build_tower_tab(notebook)
         self._build_monkey_tab(notebook)
@@ -175,28 +178,96 @@ class App:
         tab = ttk.Frame(notebook, padding=8)
         notebook.add(tab, text="刷副本")
 
-        help_text = (
-            "在 templates/dungeon/ 放入模板图：\n"
-            "  enter.png / fight.png / reward.png / exit.png"
-        )
-        ttk.Label(tab, text=help_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+        # 副本选择
+        sel_frame = ttk.LabelFrame(tab, text="副本配置", padding=6)
+        sel_frame.pack(fill=tk.X, pady=(0, 6))
 
-        self._dung_loop_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(tab, text="循环刷", variable=self._dung_loop_var).pack(anchor=tk.W, pady=2)
+        r1 = ttk.Frame(sel_frame)
+        r1.pack(fill=tk.X, pady=2)
+        ttk.Label(r1, text="副本:").pack(side=tk.LEFT)
+        self._dung_id_var = tk.IntVar(value=90)
+        ttk.Radiobutton(r1, text="90青丘境", variable=self._dung_id_var, value=90).pack(side=tk.LEFT, padx=4)
+        ttk.Radiobutton(r1, text="100副本", variable=self._dung_id_var, value=100).pack(side=tk.LEFT, padx=4)
 
-        ttk.Label(tab, text="每步等待(秒):").pack(anchor=tk.W)
-        self._dung_interval_var = tk.IntVar(value=3)
-        ttk.Spinbox(tab, from_=1, to=10, textvariable=self._dung_interval_var, width=4).pack(anchor=tk.W, pady=2)
+        r2 = ttk.Frame(sel_frame)
+        r2.pack(fill=tk.X, pady=2)
+        ttk.Label(r2, text="轮数:").pack(side=tk.LEFT)
+        self._dung_rounds_var = tk.IntVar(value=3)
+        ttk.Spinbox(r2, from_=1, to=99, textvariable=self._dung_rounds_var, width=4).pack(side=tk.LEFT, padx=4)
+        ttk.Label(r2, text="(每个副本刷几次)", foreground="gray").pack(side=tk.LEFT)
 
+        # 按钮
         bf = ttk.Frame(tab)
-        bf.pack(fill=tk.X, pady=(12, 0))
+        bf.pack(fill=tk.X, pady=(8, 0))
         self._dung_start_btn = ttk.Button(bf, text="开始刷副本", command=self._on_start_dungeon)
         self._dung_start_btn.pack(side=tk.LEFT, padx=2)
         self._dung_stop_btn = ttk.Button(bf, text="停止", command=self._on_stop_task, state=tk.DISABLED)
         self._dung_stop_btn.pack(side=tk.LEFT, padx=2)
-        ttk.Button(bf, text="打开模板目录",
-                   command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "dungeon"))
-                   ).pack(side=tk.RIGHT)
+
+        # 流程说明
+        help_text = (
+            "流程: 备忘→副本列表→选副本→传送→领任务→进入\n"
+            "→自动遇怪(0键)→OCR监控剩余场数→Boss→结算\n"
+            "坐标基于1080x1920，固定点击流程"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray",
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=(8, 0))
+
+        # 进度状态
+        self._dung_status_var = tk.StringVar(value="就绪")
+        ttk.Label(tab, textvariable=self._dung_status_var,
+                  foreground="blue").pack(anchor=tk.W, pady=(4, 0))
+
+    # ── 水晶刷怪页 ─────────────────────────────────
+
+    def _build_crystal_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="水晶刷怪")
+
+        info = ttk.LabelFrame(tab, text="功能说明", padding=6)
+        info.pack(fill=tk.X, pady=(0, 6))
+
+        help_text = (
+            "持续监控\"自动遇怪剩：XX场\"计数器。\n"
+            "当剩余次数归零后，等待战斗结束，自动点击数字键0\n"
+            "重新开启自动遇怪，实现无人值守循环刷怪。\n\n"
+            "使用条件: 已在副本中，已手动开启过第一次自动遇怪。"
+        )
+        ttk.Label(info, text=help_text, foreground="gray",
+                  justify=tk.LEFT).pack(anchor=tk.W)
+
+        ctrl = ttk.Frame(tab)
+        ctrl.pack(fill=tk.X, pady=(4, 0))
+
+        self._crystal_start_btn = ttk.Button(ctrl, text="开始监控",
+                                             command=self._on_start_crystal)
+        self._crystal_start_btn.pack(side=tk.LEFT, padx=2)
+        self._crystal_stop_btn = ttk.Button(ctrl, text="停止",
+                                            command=self._on_stop_task, state=tk.DISABLED)
+        self._crystal_stop_btn.pack(side=tk.LEFT, padx=2)
+
+        self._crystal_status_var = tk.StringVar(value="就绪")
+        ttk.Label(ctrl, textvariable=self._crystal_status_var,
+                  foreground="blue").pack(side=tk.LEFT, padx=12)
+
+    def _on_start_crystal(self):
+        dev = self._selected_device()
+        if not dev:
+            self._log("错误: 请先连接设备!")
+            return
+        switch_device(dev)
+
+        # 获取设备序列号用于ADB截图
+        devices = list_devices()
+        serial = devices.get(dev, {}).get("serial", "")
+
+        task = CrystalTask(serial=serial)
+        self._current_task = task
+        task.set_log_callback(lambda m: self.root.after(0, self._log, m))
+        task.start()
+        self._crystal_start_btn.config(state=tk.DISABLED)
+        self._crystal_stop_btn.config(state=tk.NORMAL)
+        self._crystal_status_var.set("监控中...")
 
     # ── 抓宠页 ─────────────────────────────────────
 
@@ -515,21 +586,20 @@ class App:
     def _on_start_dungeon(self):
         dev = self._selected_device()
         if not dev:
-            self._log("错误: 请先添加设备!")
+            self._log("错误: 请先连接设备!")
             return
         switch_device(dev)
-        interval = self._dung_interval_var.get()
-        steps = [
-            {"template": "templates/dungeon/enter.png",  "wait": interval, "desc": "进入副本"},
-            {"template": "templates/dungeon/fight.png",  "wait": 10,       "desc": "战斗中"},
-            {"template": "templates/dungeon/reward.png", "wait": interval, "desc": "领奖励"},
-            {"template": "templates/dungeon/exit.png",   "wait": interval, "desc": "退出"},
-        ]
-        self._current_task = FlowTask("刷副本", steps, loop=self._dung_loop_var.get())
-        self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
-        self._current_task.start()
+
+        dung_id = self._dung_id_var.get()
+        rounds = self._dung_rounds_var.get()
+
+        task = DungeonTask(dungeon_id=dung_id, rounds=rounds)
+        self._current_task = task
+        task.set_log_callback(lambda m: self.root.after(0, self._log, m))
+        task.start()
         self._dung_start_btn.config(state=tk.DISABLED)
         self._dung_stop_btn.config(state=tk.NORMAL)
+        self._dung_status_var.set(f"运行中: {dung_id}副本 x{rounds}")
 
     # ── 抓宠 ─────────────────────────────────────
 
@@ -587,14 +657,18 @@ class App:
     def _on_stop_task(self):
         if self._current_task:
             self._current_task.stop()
+        self._dung_status_var.set("已停止")
+        self._crystal_status_var.set("已停止")
         for b in [self._walk_start_btn, self._quest_start_btn,
                   self._dung_start_btn, self._pet_start_btn,
-                  self._monkey_start_btn, self._tower_start_btn]:
+                  self._monkey_start_btn, self._tower_start_btn,
+                  self._crystal_start_btn]:
             try: b.config(state=tk.NORMAL)
             except: pass
         for b in [self._walk_stop_btn, self._quest_stop_btn,
                   self._dung_stop_btn, self._pet_stop_btn,
-                  self._monkey_stop_btn, self._tower_stop_btn]:
+                  self._monkey_stop_btn, self._tower_stop_btn,
+                  self._crystal_stop_btn]:
             try: b.config(state=tk.DISABLED)
             except: pass
 
