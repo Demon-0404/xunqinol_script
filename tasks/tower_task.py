@@ -410,31 +410,41 @@ class TowerTask(BaseTask):
                 self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} bright={bright_mean:.0f} 有像素但OCR无结果 → 跳过")
                 continue
 
-            # 取最高置信度结果
-            best = max(results, key=lambda r: r[2])
-            text = best[1]
-            conf = best[2]
+            # 按置信度降序排列，逐个尝试模糊匹配
+            results_sorted = sorted(results, key=lambda r: r[2], reverse=True)
+            matched = None
+            best_text = ""
+            best_conf = 0.0
 
-            if conf < 0.1:
-                if results:
-                    all_texts = [f"'{r[1]}'(c={r[2]:.2f})" for r in results[:3]]
-                    self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} OCR低置信: {', '.join(all_texts)} → 丢弃")
-                continue
+            for r in results_sorted:
+                text = r[1]
+                conf = r[2]
 
-            self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} OCR='{text}' conf={conf:.2f}")
+                # 弹窗关键词检测
+                if any(kw in text for kw in POPUP_KEYWORDS):
+                    self.log(f"    ⚠ 弹窗检测 [{text}]，点取消关闭")
+                    self._touch(CANCEL_BTN, "取消弹窗")
+                    time.sleep(0.5)
+                    return []
 
-            if any(kw in text for kw in POPUP_KEYWORDS):
-                self.log(f"    ⚠ 弹窗检测 [{text}]，点取消关闭")
-                self._touch(CANCEL_BTN, "取消弹窗")
-                time.sleep(0.5)
-                return []
+                # 极低置信度跳过（但对有 dark 像素的行放低门槛）
+                min_conf = 0.01 if dark_ratio >= 0.02 else 0.1
+                if conf < min_conf:
+                    continue
 
-            matched = _fuzzy_match(text, self._known_names)
+                matched = _fuzzy_match(text, self._known_names)
+                if matched:
+                    best_text = text
+                    best_conf = conf
+                    break
+
             if not matched:
-                self.log(f"    Row{i} Y={yc}: '{text}' ✗ 未匹配任何怪物")
+                all_texts = [f"'{r[1]}'(c={r[2]:.2f})" for r in results_sorted[:3]]
+                self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} 无匹配: {', '.join(all_texts)}")
                 continue
 
-            self.log(f"    Row{i} Y={yc}: '{text}' → {matched} ✓")
+            self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} OCR='{best_text}' conf={best_conf:.2f}")
+            self.log(f"    Row{i} Y={yc}: '{best_text}' → {matched} ✓")
             monsters.append((matched, yc))
 
         # ── 智能楼层纠错 ──
