@@ -23,6 +23,7 @@ from tasks.walk_demo import WalkDemo
 from tasks.flow_task import FlowTask
 from tasks.tower_task import TowerTask
 from tasks.monkey_task import MonkeyTask
+from frida_blood.monitor import BloodMonitor
 
 
 class App:
@@ -34,6 +35,8 @@ class App:
 
         self._current_task = None
         self._device_names = []  # 已连接的设备名列表
+        self._blood_monitors = {}  # name -> BloodMonitor
+        self._blood_widgets = {}  # name -> (frame, status_label, btn)
 
         self._build_ui()
         self._auto_init()
@@ -76,6 +79,7 @@ class App:
         self._build_pet_tab(notebook)
         self._build_tower_tab(notebook)
         self._build_monkey_tab(notebook)
+        self._build_blood_tab(notebook)
 
         # 右侧：日志
         right = ttk.Frame(body)
@@ -282,6 +286,112 @@ class App:
                    command=lambda: os.startfile(os.path.join(BASE_DIR, "templates", "monkey"))
                    ).pack(side=tk.RIGHT)
 
+    # ── 血量显示页 ─────────────────────────────────
+
+    def _build_blood_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="血量显示")
+
+        top_bar = ttk.Frame(tab)
+        top_bar.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(top_bar, text="控制游戏内怪物血条显示（需要 Frida）",
+                  foreground="gray").pack(side=tk.LEFT)
+        ttk.Button(top_bar, text="刷新设备",
+                   command=self._on_refresh_blood).pack(side=tk.RIGHT, padx=4)
+
+        self._blood_list_frame = ttk.Frame(tab)
+        self._blood_list_frame.pack(fill=tk.BOTH, expand=True)
+
+        help_text = (
+            "工作原理: 通过 Frida 注入游戏进程，修改内存中的 blood flag。\n"
+            "需要设备已 root，且 frida-server 已运行。\n"
+            "点击[开启]后会自动设置端口转发并注入。"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray",
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 0))
+
+    def _on_refresh_blood(self):
+        """刷新血量标签页的设备列表"""
+        for w in self._blood_list_frame.winfo_children():
+            w.destroy()
+        self._blood_widgets.clear()
+
+        devices = scan_available_devices()
+        if not devices:
+            ttk.Label(self._blood_list_frame, text="未发现设备",
+                      foreground="gray").pack()
+            return
+
+        frida_port = 27042
+        for i, dev in enumerate(devices):
+            name = dev["name"]
+            serial = dev["serial"]
+            port = frida_port + i
+
+            row = ttk.Frame(self._blood_list_frame)
+            row.pack(fill=tk.X, pady=2)
+
+            ttk.Label(row, text=name, width=10, anchor=tk.W).pack(side=tk.LEFT, padx=2)
+
+            status_label = ttk.Label(row, text="未启动", foreground="gray", width=12)
+            status_label.pack(side=tk.LEFT, padx=4)
+
+            btn = ttk.Button(row, text="开启", width=6,
+                             command=lambda n=name: self._on_toggle_blood(n))
+            btn.pack(side=tk.LEFT, padx=2)
+
+            self._blood_widgets[name] = (row, status_label, btn, serial, port)
+
+            # 恢复已运行状态
+            if name in self._blood_monitors:
+                mon = self._blood_monitors[name]
+                if mon.status == "running":
+                    status_label.config(text="已开启", foreground="green")
+                    btn.config(text="关闭")
+
+    def _on_toggle_blood(self, name):
+        if name not in self._blood_widgets:
+            return
+        _, label, btn, serial, port = self._blood_widgets[name]
+
+        if name in self._blood_monitors and self._blood_monitors[name].status == "running":
+            # 关闭
+            self._log(f"[血量] 关闭 {name} 血条...")
+            self._blood_monitors[name].stop()
+            del self._blood_monitors[name]
+            label.config(text="已关闭", foreground="gray")
+            btn.config(text="开启")
+        else:
+            # 开启
+            self._log(f"[血量] 启动 {name} 血条...")
+            mon = BloodMonitor(name, serial, port)
+            self._blood_monitors[name] = mon
+
+            def on_status(dname, status, error):
+                self.root.after(0, self._on_blood_status, dname, status, error)
+
+            mon.start(on_status_change=on_status)
+            label.config(text="启动中...", foreground="orange")
+            btn.config(text="...")
+
+    def _on_blood_status(self, name, status, error):
+        """血量监控状态回调（UI 线程）"""
+        if name not in self._blood_widgets:
+            return
+        _, label, btn, _, _ = self._blood_widgets[name]
+
+        if status == "running":
+            label.config(text="已开启", foreground="green")
+            btn.config(text="关闭")
+            self._log(f"[血量] {name} 血条已开启")
+        elif status == "error":
+            label.config(text=f"错误: {error[:20]}", foreground="red")
+            btn.config(text="开启")
+            self._log(f"[血量] {name} 启动失败: {error}")
+        elif status == "stopped":
+            label.config(text="已关闭", foreground="gray")
+            btn.config(text="开启")
+
     # ── 设备管理 ──────────────────────────────────
 
     def _auto_init(self):
@@ -293,6 +403,7 @@ class App:
         if names:
             self._device_var.set(names[0])
         self._log(f"发现 {len(names)} 个实例: {', '.join(names)}")
+        self._on_refresh_blood()
 
     def _on_refresh_devices(self):
         """手动刷新设备列表"""

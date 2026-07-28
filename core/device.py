@@ -21,10 +21,23 @@ def _adb_path() -> str:
 
 # ── MuMu 配置解析 ─────────────────────────────
 
+def _read_adb_port(vm_dir: str) -> str | None:
+    """从 vm_config.json 读取实例的 ADB 端口号"""
+    vm_cfg = os.path.join(vm_dir, "configs", "vm_config.json")
+    if not os.path.exists(vm_cfg):
+        return None
+    try:
+        with open(vm_cfg, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        return cfg.get("vm", {}).get("nat", {}).get("port_forward", {}).get("adb", {}).get("host_port")
+    except Exception:
+        return None
+
+
 def _parse_mumu_instances() -> list[dict]:
     """
     从 MuMu 配置目录读取所有多开实例。
-    返回: [{"name": "天音", "index": 0, "dir": "..."}, ...]
+    返回: [{"name": "天音", "index": 0, "dir": "...", "adb_port": "16384"}, ...]
     """
     instances = []
     if not os.path.isdir(MUMU_VMS_PATH):
@@ -42,10 +55,10 @@ def _parse_mumu_instances() -> list[dict]:
             with open(extra_cfg, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
             name = cfg.get("playerName", entry)
-            # 从目录名提取 index: MuMuPlayer-12.0-3 → 3
             match = re.search(r"-(\d+)$", entry)
             index = int(match.group(1)) if match else 0
-            instances.append({"name": name, "index": index, "dir": vm_dir})
+            adb_port = _read_adb_port(vm_dir)
+            instances.append({"name": name, "index": index, "dir": vm_dir, "adb_port": adb_port})
         except Exception:
             pass
 
@@ -53,7 +66,7 @@ def _parse_mumu_instances() -> list[dict]:
 
 
 def _mumu_port(index: int) -> str:
-    """MuMu 12 端口映射: index 0→16384, index 1→16386, ..."""
+    """MuMu 12 端口映射: index 0→16384, index 1→16386, ...（旧版 fallback）"""
     return f"127.0.0.1:{16384 + index * 2}"
 
 
@@ -110,14 +123,34 @@ def scan_available_devices() -> list[dict]:
     has_7555 = "127.0.0.1:7555" in online_serials
 
     for inst in instances:
-        port = _mumu_port(inst["index"])
-        # 单开模式：计算端口不在线但7555在线，用7555
-        if port not in online_serials and has_7555:
-            port = "127.0.0.1:7555"
+        # 优先使用配置文件中的真实端口，没有则用公式推算
+        adb_port = inst.get("adb_port")
+        if adb_port:
+            port = f"127.0.0.1:{adb_port}"
+        else:
+            port = _mumu_port(inst["index"])
+
+        # 尝试连接
+        if port not in online_serials:
             _try_connect(port)
-        elif port not in online_serials:
-            _try_connect(port)
-        is_connected = port in online_serials or has_7555
+            # 如果还是连不上且有 7555，fallback 到 7555
+            if port not in online_serials and has_7555:
+                port = "127.0.0.1:7555"
+
+        # 刷新在线列表判断连接状态
+        try:
+            out = subprocess.run(
+                [_adb_path(), "devices"], capture_output=True, text=True, timeout=5,
+                encoding="utf-8", errors="replace"
+            )
+            current_online = set()
+            for line in out.stdout.strip().split("\n")[1:]:
+                if "\tdevice" in line:
+                    current_online.add(line.split("\t")[0])
+        except Exception:
+            current_online = online_serials
+
+        is_connected = port in current_online
         result.append({
             "name": inst["name"], "serial": port, "connected": is_connected
         })
