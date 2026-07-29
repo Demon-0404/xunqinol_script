@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """Frida 血条监控 —— 每设备一个独立线程"""
+import os
 import subprocess
 import threading
 import time
 import frida
 
 ADB = r"D:\Setup_and_Downloads\Setup\MuMuPlayer\nx_main\adb.exe"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRIDA_SERVER_PATH = os.path.join(BASE_DIR, "frida-server")
+FRIDA_SERVER_DEVICE_PATH = "/data/local/tmp/frida-server"
 
 FRIDA_BASE_PORT = 27042  # 遁甲用这个，其他设备递增
 
@@ -40,6 +44,50 @@ function fixBlood() {
 }
 setInterval(fixBlood, 500);
 """
+
+
+def _is_frida_running(adb_serial: str) -> bool:
+    """检查设备上 frida-server 是否已在运行"""
+    r = subprocess.run(
+        [ADB, "-s", adb_serial, "shell", "ps", "-A"],
+        capture_output=True, text=True, timeout=10
+    )
+    return "frida-server" in r.stdout or "frida" in r.stdout.lower()
+
+
+def _start_frida_server(adb_serial: str) -> bool:
+    """推送并启动 frida-server"""
+    if not os.path.exists(FRIDA_SERVER_PATH):
+        return False
+    subprocess.run(
+        [ADB, "-s", adb_serial, "push", FRIDA_SERVER_PATH, FRIDA_SERVER_DEVICE_PATH],
+        capture_output=True, timeout=30
+    )
+    subprocess.run(
+        [ADB, "-s", adb_serial, "shell", "chmod", "755", FRIDA_SERVER_DEVICE_PATH],
+        capture_output=True, timeout=10
+    )
+    # 尝试 adb root 提权
+    subprocess.run(
+        [ADB, "-s", adb_serial, "root"],
+        capture_output=True, timeout=5
+    )
+    time.sleep(0.5)
+    # 杀掉旧的 frida-server
+    subprocess.run(
+        [ADB, "-s", adb_serial, "shell", "killall", "frida-server"],
+        capture_output=True, timeout=5
+    )
+    time.sleep(0.5)
+    # 启动 frida-server（adb root 后自动以 root 运行）
+    subprocess.run(
+        [ADB, "-s", adb_serial, "shell",
+         f"{FRIDA_SERVER_DEVICE_PATH} -D &"],
+        capture_output=True, timeout=10
+    )
+    time.sleep(3)
+    return _is_frida_running(adb_serial)
+
 
 
 def _get_game_pid(adb_serial: str) -> int | None:
@@ -117,10 +165,17 @@ class BloodMonitor:
             update("error", "游戏未运行")
             return
 
-        # 2. 端口转发
+        # 2. 确保 frida-server 运行
+        if not _is_frida_running(self.adb_serial):
+            update("starting", "启动frida-server...")
+            if not _start_frida_server(self.adb_serial):
+                update("error", "frida-server启动失败")
+                return
+
+        # 3. 端口转发
         _ensure_frida_port(self.adb_serial, self.frida_port)
 
-        # 3. 连接 Frida
+        # 4. 连接 Frida
         try:
             device = frida.get_device_manager().add_remote_device(
                 f"127.0.0.1:{self.frida_port}"
