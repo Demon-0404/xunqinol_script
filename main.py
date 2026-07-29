@@ -630,7 +630,9 @@ class App:
             self._log("错误: 请先连接设备!")
             return
         switch_device(dev)
-        self._current_task = TowerTask()
+        devices = list_devices()
+        serial = devices.get(dev, {}).get("serial", "")
+        self._current_task = TowerTask(serial=serial)
         self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
         self._current_task.start()
         self._tower_start_btn.config(state=tk.DISABLED)

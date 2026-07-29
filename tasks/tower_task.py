@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
 # ── 坐标配置 (1080x1920) ──────────────────────
-NEARBY_BTN = (500, 1200)       # 周围列表按钮
+NEARBY_BTN = (350, 1780)       # 周围列表按钮(数字键7位置，避开聊天框)
 NPC_TAB = (750, 250)           # NPC标签
 ROW_X = 180                    # 点击行内X位置
 ROW_Y_START = 450              # 第一行Y
@@ -94,12 +94,13 @@ class TowerTask(BaseTask):
     TOTAL_FLOORS = 7
     DEBUG_CLICK = True  # 调试模式：每次点击后截图标注红圈
 
-    def __init__(self):
+    def __init__(self, serial: str = ""):
         super().__init__("玄兵塔")
         self._reader = None
         self._cleared = 0
         self._known_names = []
         self._click_seq = 0
+        self._serial = serial
 
     def _get_reader(self):
         if self._reader is None:
@@ -270,12 +271,18 @@ class TowerTask(BaseTask):
 
     def _open_npc_list(self):
         for retry in range(3):
-            # 先关闭可能阻塞的弹窗/误开面板
-            if self._dismiss_panels():
-                time.sleep(0.3)
             self.log(f"  打开周围列表... (尝试{retry+1}/3)")
             self._touch(NEARBY_BTN, "周围列表")
-            time.sleep(1.0)
+            time.sleep(1.5)
+
+            if self._check_text_at("周围列表", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
+                self.log("  '周围列表'已打开 ✓")
+            else:
+                self.log("  未检测到'周围列表'，寻找取消关闭误开面板...")
+                self._dismiss_panels()
+                time.sleep(0.5)
+                continue
+
             self._touch(NPC_TAB, "NPC标签")
             time.sleep(1.2)
 
@@ -289,12 +296,16 @@ class TowerTask(BaseTask):
         import subprocess
         adb = os.environ.get("ANDROID_ADB", "adb")
         tmp = os.path.join(LOG_DIR, "_tower_tmp.png")
-        # 优先用 adb screencap（画质好，OCR更准），失败了再降级到 airtest snapshot
+        adb_args = [adb]
+        if self._serial:
+            adb_args += ["-s", self._serial]
         try:
-            subprocess.run([adb, "shell", "screencap", "-p", "/sdcard/sc.png"],
-                           capture_output=True, timeout=5)
-            subprocess.run([adb, "pull", "/sdcard/sc.png", tmp],
-                           capture_output=True, timeout=5)
+            subprocess.run(
+                adb_args + ["shell", "screencap", "-p", "/sdcard/sc.png"],
+                capture_output=True, timeout=5)
+            subprocess.run(
+                adb_args + ["pull", "/sdcard/sc.png", tmp],
+                capture_output=True, timeout=5)
             return np.array(Image.open(tmp))[:, :, :3]
         except Exception:
             try:
