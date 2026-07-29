@@ -411,18 +411,20 @@ class TowerTask(BaseTask):
                 self.log(f"    Row{i} Y={yc}: 空白 (dark={dark_ratio:.3f}) → 跳过")
                 continue
 
-            try:
-                results = reader.readtext(row, mag_ratio=2)
-            except Exception as ex:
-                self.log(f"    Row{i} Y={yc}: OCR异常 ({ex})")
-                continue
+            # 多种 mag_ratio 尝试，避免某个 ratio 对特定文字置信度极低
+            all_results = []
+            for mag in [1, 3]:
+                try:
+                    all_results.extend(reader.readtext(row, mag_ratio=mag))
+                except Exception:
+                    pass
 
-            if not results:
+            if not all_results:
                 self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} bright={bright_mean:.0f} 有像素但OCR无结果 → 跳过")
                 continue
 
             # 按置信度降序排列，逐个尝试模糊匹配
-            results_sorted = sorted(results, key=lambda r: r[2], reverse=True)
+            results_sorted = sorted(all_results, key=lambda r: r[2], reverse=True)
             matched = None
             best_text = ""
             best_conf = 0.0
