@@ -223,8 +223,8 @@ class TowerTask(BaseTask):
         name, y = valid[0]
         self.log(f"  >>> {name} (Y={y})")
 
-        boss_names = [f[-1] for f in FLOOR_MONSTERS.values()]
-        is_boss = _fuzzy_match(name, boss_names) is not None
+        boss_name = FLOOR_MONSTERS[floor][-1]
+        is_boss = _fuzzy_match(name, [boss_name]) is not None
         self._engage_monster(name, y, is_boss=is_boss)
         self._cleared += 1
         return "boss" if is_boss else True
