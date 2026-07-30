@@ -92,7 +92,7 @@ class TowerTask(BaseTask):
     """玄兵塔自动清怪"""
 
     TOTAL_FLOORS = 7
-    DEBUG_CLICK = True  # 调试模式：每次点击后截图标注红圈
+    DEBUG_CLICK = False  # 调试截图已关闭，需要时改为True
 
     def __init__(self, serial: str = ""):
         super().__init__("玄兵塔")
@@ -411,49 +411,47 @@ class TowerTask(BaseTask):
                 self.log(f"    Row{i} Y={yc}: 空白 (dark={dark_ratio:.3f}) → 跳过")
                 continue
 
-            # 多种 mag_ratio 尝试，避免某个 ratio 对特定文字置信度极低
-            all_results = []
-            for mag in [1, 3]:
-                try:
-                    all_results.extend(reader.readtext(row, mag_ratio=mag))
-                except Exception:
-                    pass
-
-            if not all_results:
-                self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} bright={bright_mean:.0f} 有像素但OCR无结果 → 跳过")
-                continue
-
-            # 按置信度降序排列，逐个尝试模糊匹配
-            results_sorted = sorted(all_results, key=lambda r: r[2], reverse=True)
+            # 先用 mag_ratio=1，匹配不到再试 mag_ratio=3
             matched = None
             best_text = ""
             best_conf = 0.0
 
-            for r in results_sorted:
-                text = r[1]
-                conf = r[2]
-
-                # 弹窗关键词检测
-                if any(kw in text for kw in POPUP_KEYWORDS):
-                    self.log(f"    ⚠ 弹窗检测 [{text}]，点取消关闭")
-                    self._touch(CANCEL_BTN, "取消弹窗")
-                    time.sleep(0.5)
-                    return []
-
-                # 极低置信度跳过（但对有 dark 像素的行放低门槛）
-                min_conf = 0.01 if dark_ratio >= 0.02 else 0.1
-                if conf < min_conf:
+            for mag in [1, 3]:
+                try:
+                    results = reader.readtext(row, mag_ratio=mag)
+                except Exception:
                     continue
 
-                matched = _fuzzy_match(text, self._known_names)
+                if not results:
+                    continue
+
+                for r in sorted(results, key=lambda r: r[2], reverse=True):
+                    text = r[1]
+                    conf = r[2]
+
+                    if any(kw in text for kw in POPUP_KEYWORDS):
+                        self.log(f"    ⚠ 弹窗检测 [{text}]，点取消关闭")
+                        self._touch(CANCEL_BTN, "取消弹窗")
+                        time.sleep(0.5)
+                        return []
+
+                    min_conf = 0.01 if dark_ratio >= 0.02 else 0.1
+                    if conf < min_conf:
+                        continue
+
+                    m = _fuzzy_match(text, self._known_names)
+                    if m:
+                        matched = m
+                        best_text = text
+                        best_conf = conf
+                        break
+
                 if matched:
-                    best_text = text
-                    best_conf = conf
-                    break
+                    break  # 第一个 mag_ratio 已匹配，跳过第二个
 
             if not matched:
-                all_texts = [f"'{r[1]}'(c={r[2]:.2f})" for r in results_sorted[:3]]
-                self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} 无匹配: {', '.join(all_texts)}")
+                # 汇总两个 mag_ratio 的结果用于日志
+                self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} 无匹配")
                 continue
 
             self.log(f"    Row{i} Y={yc}: dark={dark_ratio:.3f} OCR='{best_text}' conf={best_conf:.2f}")
@@ -545,7 +543,7 @@ class TowerTask(BaseTask):
         while time.time() - start < timeout and self._running:
             if not self._is_in_battle():
                 miss_count += 1
-                if miss_count >= 4:  # 连续2秒没检测到才确认结束
+                if miss_count >= 2:  # 每次检测3-4s，2次=6-8s足够确认
                     self.log("    战斗结束!")
                     return True
             else:
@@ -553,28 +551,61 @@ class TowerTask(BaseTask):
             time.sleep(BATTLE_CHECK_INTERVAL)
         return False
 
-    def _skip_settlement(self, max_rounds: int = 10):
-        """结算弹窗：检测'按5键继续'或'战斗胜利'→确认→直到消失"""
+    def _check_settlement_once(self) -> tuple:
+        """一次截图同时检测'按5键继续'和'战斗胜利'，返回(has_settle, has_victory)"""
+        try:
+            arr = self._screenshot_arr()
+        except Exception:
+            return False, False
+        h, w = arr.shape[:2]
+        reader = self._get_reader()
+        has_settle, has_victory = False, False
+
+        # 检测"按5键继续"
+        cx, cy = SETTLE_CHECK
+        s = SETTLE_RANGE
+        y1, y2 = max(0, cy - s), min(h, cy + s)
+        x1, x2 = max(0, cx - s), min(w, cx + s)
+        try:
+            for r in reader.readtext(arr[y1:y2, x1:x2, :]):
+                if r[2] >= 0.1 and "按5键继续" in r[1]:
+                    has_settle = True
+                    break
+        except Exception:
+            pass
+
+        # 检测"战斗胜利"
+        cx, cy = 500, 500
+        s = 200
+        y1, y2 = max(0, cy - s), min(h, cy + s)
+        x1, x2 = max(0, cx - s), min(w, cx + s)
+        try:
+            for r in reader.readtext(arr[y1:y2, x1:x2, :]):
+                if r[2] >= 0.1 and "战斗胜利" in r[1]:
+                    has_victory = True
+                    break
+        except Exception:
+            pass
+
+        return has_settle, has_victory
+
+    def _skip_settlement(self, max_rounds: int = 6):
+        """结算弹窗：一次截图检测两处→确认→直到消失"""
         self.log(f"    [结算检测] 开始(最多{max_rounds}轮)...")
         for i in range(max_rounds):
             if not self._running:
                 return
-            has_settle = self._check_text_present("按5键继续", SETTLE_CHECK, SETTLE_RANGE)
-            has_victory = self._check_text_present("战斗胜利", (500, 500), 200)
+            has_settle, has_victory = self._check_settlement_once()
             if has_settle or has_victory:
                 detail = []
                 if has_settle: detail.append("按5键继续")
                 if has_victory: detail.append("战斗胜利")
                 self.log(f"    [结算检测] 第{i+1}轮: 检测到{'/'.join(detail)} → 确认")
                 self._touch(CONFIRM_BTN, "确认结算")
-                time.sleep(SETTLE_CHECK_INTERVAL)
+                time.sleep(0.5)
             else:
-                time.sleep(0.3)
-                has2 = self._check_text_present("按5键继续", SETTLE_CHECK, SETTLE_RANGE)
-                has3 = self._check_text_present("战斗胜利", (500, 500), 200)
-                if not has2 and not has3:
-                    self.log(f"    [结算检测] 第{i+1}轮: 无弹窗 → 结束")
-                    return
+                self.log(f"    [结算检测] 第{i+1}轮: 无弹窗 → 结束")
+                return
         self.log(f"    [结算检测] 完成({max_rounds}轮)")
 
     def _check_text_at(self, keyword: str, center: tuple, spread: int) -> bool:

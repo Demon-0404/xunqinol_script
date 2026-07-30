@@ -133,7 +133,19 @@ def scan_available_devices() -> list[dict]:
         # 尝试连接
         if port not in online_serials:
             _try_connect(port)
-            # 如果还是连不上且有 7555，fallback 到 7555
+            # 刷新 online_serials，防止 fallback 误判
+            try:
+                out2 = subprocess.run(
+                    [_adb_path(), "devices"], capture_output=True, text=True, timeout=5,
+                    encoding="utf-8", errors="replace"
+                )
+                online_serials = set()
+                for line in out2.stdout.strip().split("\n")[1:]:
+                    if "\tdevice" in line:
+                        online_serials.add(line.split("\t")[0])
+            except Exception:
+                pass
+            # 还是连不上且有 7555，fallback 到 7555
             if port not in online_serials and has_7555:
                 port = "127.0.0.1:7555"
 
