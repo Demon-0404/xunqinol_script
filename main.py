@@ -26,6 +26,7 @@ from tasks.monkey_task import MonkeyTask
 from frida_blood.monitor import BloodMonitor
 from tasks.dungeon_task import DungeonTask
 from tasks.crystal_task import CrystalTask
+from tasks.chumo_task import ChumoTask
 
 
 class App:
@@ -81,6 +82,7 @@ class App:
         self._build_crystal_tab(notebook)
         self._build_pet_tab(notebook)
         self._build_tower_tab(notebook)
+        self._build_chumo_tab(notebook)
         self._build_monkey_tab(notebook)
         self._build_blood_tab(notebook)
 
@@ -328,6 +330,35 @@ class App:
             "  next_floor.png —— 传送NPC (可选)"
         )
         ttk.Label(tab, text=help_text, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=(6, 0))
+
+    # ── 仗剑除魔页 ─────────────────────────────
+
+    def _build_chumo_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="仗剑除魔")
+
+        help_text = (
+            "20轮跑环任务 —— 自动接取、传送、战斗、交任务。\n"
+            "使用条件: 已在游戏中，角色可自由移动。\n"
+            "流程: 找日常活动大使 → 接任务 → 传送 → 战斗 → 交任务 ×20轮"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray",
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
+        ctrl = ttk.Frame(tab)
+        ctrl.pack(fill=tk.X, pady=(8, 0))
+
+        self._chumo_start_btn = ttk.Button(ctrl, text="开始除魔",
+                                           command=self._on_start_chumo)
+        self._chumo_start_btn.pack(side=tk.LEFT, padx=2)
+        self._chumo_stop_btn = ttk.Button(ctrl, text="停止",
+                                          command=self._on_stop_task,
+                                          state=tk.DISABLED)
+        self._chumo_stop_btn.pack(side=tk.LEFT, padx=2)
+
+        self._chumo_status_var = tk.StringVar(value="就绪")
+        ttk.Label(ctrl, textvariable=self._chumo_status_var,
+                  foreground="blue").pack(side=tk.LEFT, padx=12)
 
     # ── 打泼猴页 ─────────────────────────────────
 
@@ -638,6 +669,22 @@ class App:
         self._tower_start_btn.config(state=tk.DISABLED)
         self._tower_stop_btn.config(state=tk.NORMAL)
 
+    # ── 仗剑除魔 ─────────────────────────────────────
+
+    def _on_start_chumo(self):
+        dev = self._selected_device()
+        if not dev:
+            self._log("错误: 请先连接设备!")
+            return
+        switch_device(dev)
+        devices = list_devices()
+        serial = devices.get(dev, {}).get("serial", "")
+        self._current_task = ChumoTask(serial=serial)
+        self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
+        self._current_task.start()
+        self._chumo_start_btn.config(state=tk.DISABLED)
+        self._chumo_stop_btn.config(state=tk.NORMAL)
+
     # ── 打泼猴 ─────────────────────────────────────
 
     def _on_start_monkey(self):
@@ -661,16 +708,17 @@ class App:
             self._current_task.stop()
         self._dung_status_var.set("已停止")
         self._crystal_status_var.set("已停止")
+        self._chumo_status_var.set("已停止")
         for b in [self._walk_start_btn, self._quest_start_btn,
                   self._dung_start_btn, self._pet_start_btn,
                   self._monkey_start_btn, self._tower_start_btn,
-                  self._crystal_start_btn]:
+                  self._crystal_start_btn, self._chumo_start_btn]:
             try: b.config(state=tk.NORMAL)
             except: pass
         for b in [self._walk_stop_btn, self._quest_stop_btn,
                   self._dung_stop_btn, self._pet_stop_btn,
                   self._monkey_stop_btn, self._tower_stop_btn,
-                  self._crystal_stop_btn]:
+                  self._crystal_stop_btn, self._chumo_stop_btn]:
             try: b.config(state=tk.DISABLED)
             except: pass
 
