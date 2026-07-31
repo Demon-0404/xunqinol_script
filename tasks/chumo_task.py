@@ -314,7 +314,7 @@ class ChumoTask(BaseTask):
         # 确认选择 → 确认寻路
         self._touch(CONFIRM, "确认选择")
         self._touch(CONFIRM, "确认寻路")
-        self._sleep(2.0)
+        self._sleep(5.0)
 
         # 键5 → 对话大使
         self._touch(KEY5, "数字键5对话")
