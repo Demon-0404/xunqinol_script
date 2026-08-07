@@ -12,7 +12,7 @@ class MonkeyTask(BaseTask):
     WAIT_BATTLE = 4.4           # 战斗时间（避免误触）
     WAIT_SETTLE = 0.5           # 结算后等下一轮
 
-    def __init__(self, monkey_pos=(500, 500), option_pos=(500, 700),
+    def __init__(self, monkey_pos=(150, 1590), option_pos=(550, 1590),
                  confirm_pos=(100, 1200)):
         super().__init__("打泼猴")
         self._monkey_pos = monkey_pos
