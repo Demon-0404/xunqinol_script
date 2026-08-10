@@ -27,6 +27,7 @@ from frida_blood.monitor import BloodMonitor
 from tasks.dungeon_task import DungeonTask
 from tasks.crystal_task import CrystalTask
 from tasks.chumo_task import ChumoTask
+from tasks.smith_task import SmithTask
 
 
 class App:
@@ -83,6 +84,7 @@ class App:
         self._build_pet_tab(notebook)
         self._build_tower_tab(notebook)
         self._build_chumo_tab(notebook)
+        self._build_smith_tab(notebook)
         self._build_monkey_tab(notebook)
         self._build_blood_tab(notebook)
 
@@ -359,6 +361,48 @@ class App:
         self._chumo_status_var = tk.StringVar(value="就绪")
         ttk.Label(ctrl, textvariable=self._chumo_status_var,
                   foreground="blue").pack(side=tk.LEFT, padx=12)
+
+    # ── 名匠石磨页 ─────────────────────────────
+
+    def _build_smith_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="名匠石磨")
+
+        help_text = (
+            "站在名匠NPC旁边启动。无限循环兑换石磨。\n"
+            "流程: 对话NPC → 选第3项 → 连点键5确认 → 下一轮"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray",
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
+        ttk.Label(tab, text="每轮间隔(秒):").pack(anchor=tk.W)
+        self._smith_interval_var = tk.DoubleVar(value=1.2)
+        ttk.Spinbox(tab, from_=0.5, to=10, increment=0.1,
+                    textvariable=self._smith_interval_var, width=5).pack(anchor=tk.W, pady=2)
+
+        bf = ttk.Frame(tab)
+        bf.pack(fill=tk.X, pady=(12, 0))
+        self._smith_start_btn = ttk.Button(bf, text="开始兑换",
+                                           command=self._on_start_smith)
+        self._smith_start_btn.pack(side=tk.LEFT, padx=2)
+        self._smith_stop_btn = ttk.Button(bf, text="停止",
+                                          command=self._on_stop_task,
+                                          state=tk.DISABLED)
+        self._smith_stop_btn.pack(side=tk.LEFT, padx=2)
+
+    def _on_start_smith(self):
+        dev = self._selected_device()
+        if not dev:
+            self._log("错误: 请先连接设备!")
+            return
+        switch_device(dev)
+        task = SmithTask()
+        task.WAIT_ROUND = self._smith_interval_var.get()
+        self._current_task = task
+        self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
+        self._current_task.start()
+        self._smith_start_btn.config(state=tk.DISABLED)
+        self._smith_stop_btn.config(state=tk.NORMAL)
 
     # ── 打泼猴页 ─────────────────────────────────
 
@@ -712,13 +756,15 @@ class App:
         for b in [self._walk_start_btn, self._quest_start_btn,
                   self._dung_start_btn, self._pet_start_btn,
                   self._monkey_start_btn, self._tower_start_btn,
-                  self._crystal_start_btn, self._chumo_start_btn]:
+                  self._crystal_start_btn, self._chumo_start_btn,
+                  self._smith_start_btn]:
             try: b.config(state=tk.NORMAL)
             except: pass
         for b in [self._walk_stop_btn, self._quest_stop_btn,
                   self._dung_stop_btn, self._pet_stop_btn,
                   self._monkey_stop_btn, self._tower_stop_btn,
-                  self._crystal_stop_btn, self._chumo_stop_btn]:
+                  self._crystal_stop_btn, self._chumo_stop_btn,
+                  self._smith_stop_btn]:
             try: b.config(state=tk.DISABLED)
             except: pass
 
