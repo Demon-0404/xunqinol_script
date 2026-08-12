@@ -3,9 +3,14 @@ from abc import ABC, abstractmethod
 import threading
 import time
 
+# ── 公共坐标 (1080x1920) ────────────────────
+STAR_KEY = (150, 1790)   # *号键 → 一键领取/提交
+
 
 class BaseTask(ABC):
     """所有自动化任务的基类，提供统一的启动/停止/状态管理"""
+
+    KEY5 = (150, 1590)    # 数字键5 → 确认/对话
 
     def __init__(self, name: str):
         self.name = name
@@ -67,6 +72,32 @@ class BaseTask(ABC):
         finally:
             self._running = False
             self.log(self.name + " 已停止")
+
+    # ── 任务交互模板 ──────────────────────────
+
+    def _quest_accept(self):
+        """接取任务: 5→5→*  然后等1s"""
+        from airtest.core.api import touch
+        self.log("  接取: 5→5→*...")
+        touch(self.KEY5)
+        time.sleep(0.8)
+        touch(self.KEY5)
+        time.sleep(0.8)
+        touch(STAR_KEY)
+        time.sleep(1.0)
+        self.log("  接取完成")
+
+    def _quest_submit(self):
+        """提交任务: 5→5→* → 等3s结算消失"""
+        from airtest.core.api import touch
+        self.log("  提交: 5→5→*...")
+        touch(self.KEY5)
+        time.sleep(0.8)
+        touch(self.KEY5)
+        time.sleep(0.8)
+        touch(STAR_KEY)
+        self.log("  提交完成，等待3s...")
+        time.sleep(3.0)
 
     @abstractmethod
     def run(self):
