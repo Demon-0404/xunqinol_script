@@ -507,12 +507,15 @@ class Dungeon100Task(BaseTask):
             time.sleep(0.5)
 
     def _quest_teleport(self):
-        """任务列表-&gt;确认-&gt;瞬间传送"""
+        """任务列表-&gt;确认-&gt;瞬间传送-&gt;提交任务"""
         self.log("── 任务传送阶段 ──")
         self._tap(KEY1, "任务列表(1)", WAIT_PAGE)
         self._tap(STEP_CONFIRM, "确认", WAIT_PAGE)
         self._tap((500, 790), "瞬间传送", WAIT_TELEPORT)
         self.log("  传送完成")
+        time.sleep(2.0)
+        self._submit_quest()
+        self.log("  提交完成")
 
     # ── 主流程 ─────────────────────────────────
 
