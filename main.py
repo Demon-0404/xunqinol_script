@@ -25,6 +25,7 @@ from tasks.tower_task import TowerTask
 from tasks.monkey_task import MonkeyTask
 from frida_blood.monitor import BloodMonitor
 from tasks.dungeon_task import DungeonTask
+from tasks.dungeon100_task import Dungeon100Task
 from tasks.crystal_task import CrystalTask
 from tasks.chumo_task import ChumoTask
 from tasks.smith_task import SmithTask
@@ -80,6 +81,7 @@ class App:
         self._build_walk_tab(notebook)
         self._build_quest_tab(notebook)
         self._build_dungeon_tab(notebook)
+        self._build_dungeon100_tab(notebook)
         self._build_crystal_tab(notebook)
         self._build_pet_tab(notebook)
         self._build_tower_tab(notebook)
@@ -221,6 +223,36 @@ class App:
         self._dung_status_var = tk.StringVar(value="就绪")
         ttk.Label(tab, textvariable=self._dung_status_var,
                   foreground="blue").pack(anchor=tk.W, pady=(4, 0))
+
+    # ── 100副本页 ─────────────────────────────────
+
+    def _build_dungeon100_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="100副本")
+
+        help_text = (
+            "Phase 0: NPC对话 -> 领任务 -> 确认进入\n"
+            "Phase 1-4: 惊凡渊走路 + 传送门 -> 裂影渊 -> 泣魔渊 -> 陨仙渊\n"
+            "Phase 5-6: NPC扫描(洞渊战魂/百鬼之王) + 交/接任务 + Boss战\n"
+            "Phase 7: 任务列表 -> 确认 -> 瞬间传送 -> 提交任务\n"
+            "使用条件: 角色需已在NPC面前，坐标基于1080x1920"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray",
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
+        bf = ttk.Frame(tab)
+        bf.pack(fill=tk.X, pady=(8, 0))
+        self._dung100_start_btn = ttk.Button(bf, text="开始100副本",
+                                              command=self._on_start_dungeon100)
+        self._dung100_start_btn.pack(side=tk.LEFT, padx=2)
+        self._dung100_stop_btn = ttk.Button(bf, text="停止",
+                                             command=self._on_stop_task,
+                                             state=tk.DISABLED)
+        self._dung100_stop_btn.pack(side=tk.LEFT, padx=2)
+
+        self._dung100_status_var = tk.StringVar(value="就绪")
+        ttk.Label(bf, textvariable=self._dung100_status_var,
+                  foreground="blue").pack(side=tk.LEFT, padx=12)
 
     # ── 水晶刷怪页 ─────────────────────────────────
 
@@ -676,6 +708,23 @@ class App:
         self._dung_stop_btn.config(state=tk.NORMAL)
         self._dung_status_var.set(f"运行中: {dung_id}副本 x{rounds}")
 
+    # ── 100副本 ─────────────────────────────────────
+
+    def _on_start_dungeon100(self):
+        dev = self._selected_device()
+        if not dev:
+            self._log("错误: 请先连接设备!")
+            return
+        switch_device(dev)
+        devices = list_devices()
+        serial = devices.get(dev, {}).get("serial", "")
+        self._current_task = Dungeon100Task(serial=serial)
+        self._current_task.set_log_callback(lambda m: self.root.after(0, self._log, m))
+        self._current_task.start()
+        self._dung100_start_btn.config(state=tk.DISABLED)
+        self._dung100_stop_btn.config(state=tk.NORMAL)
+        self._dung100_status_var.set("运行中...")
+
     # ── 抓宠 ─────────────────────────────────────
 
     def _on_start_pet(self):
@@ -751,17 +800,20 @@ class App:
         if self._current_task:
             self._current_task.stop()
         self._dung_status_var.set("已停止")
+        self._dung100_status_var.set("已停止")
         self._crystal_status_var.set("已停止")
         self._chumo_status_var.set("已停止")
         for b in [self._walk_start_btn, self._quest_start_btn,
-                  self._dung_start_btn, self._pet_start_btn,
+                  self._dung_start_btn, self._dung100_start_btn,
+                  self._pet_start_btn,
                   self._monkey_start_btn, self._tower_start_btn,
                   self._crystal_start_btn, self._chumo_start_btn,
                   self._smith_start_btn]:
             try: b.config(state=tk.NORMAL)
             except: pass
         for b in [self._walk_stop_btn, self._quest_stop_btn,
-                  self._dung_stop_btn, self._pet_stop_btn,
+                  self._dung_stop_btn, self._dung100_stop_btn,
+                  self._pet_stop_btn,
                   self._monkey_stop_btn, self._tower_stop_btn,
                   self._crystal_stop_btn, self._chumo_stop_btn,
                   self._smith_stop_btn]:
