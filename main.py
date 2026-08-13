@@ -41,10 +41,12 @@ class App:
         self._tab_devices = {}        # tab_key -> list[device_name] (当前运行)
         self._blood_monitors = {}  # name -> BloodMonitor
         self._blood_widgets = {}  # name -> (frame, status_label, btn)
+        self._dungeon100_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 10)]
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
         self._auto_init()
+        threading.Thread(target=self._warmup_ocr, daemon=True).start()
 
     # ── UI 构建 ─────────────────────────────────────
 
@@ -137,6 +139,16 @@ class App:
                 ttk.Label(row, textvariable=status_var,
                           foreground="blue" if running else "gray").pack(side=tk.LEFT, padx=8)
                 widgets_map[name] = {"start": start_btn, "stop": stop_btn, "status": status_var}
+                if tab_key == "dungeon100":
+                    last = self._dungeon100_last_phase(name)
+                    if last >= 0:
+                        ttk.Label(row, text=f"上次: Phase {last}",
+                                  foreground="darkorange").pack(side=tk.LEFT, padx=6)
+                    start_var = tk.StringVar(value="自动续跑")
+                    ttk.Combobox(row, textvariable=start_var,
+                                 values=self._dungeon100_start_options,
+                                 state="readonly", width=14).pack(side=tk.LEFT, padx=6)
+                    widgets_map[name]["start_var"] = start_var
 
     def _start_dev(self, tab_key: str, dev: str):
         handler = self._tab_handlers.get(tab_key)
@@ -264,6 +276,14 @@ class App:
         names = [d["name"] for d in self._available_devices]
         self._log(f"发现 {len(names)} 个实例: {', '.join(names)}")
         self._on_refresh_blood()
+
+    def _warmup_ocr(self):
+        """后台预热 OCR 共享服务，避免任务首次用到 OCR 时卡在连接阶段"""
+        try:
+            from core.ocr_client import warmup
+            warmup()
+        except Exception:
+            pass
 
     def _on_refresh_devices(self):
         """手动刷新设备列表"""
@@ -431,14 +451,23 @@ class App:
         tab = ttk.Frame(notebook, padding=8)
         notebook.add(tab, text="100副本")
 
-        # 设备选择行
+        # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "dungeon100", self._on_start_dungeon100)
 
+        ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
+                  foreground="gray").pack(anchor=tk.W, pady=(0, 4))
+
         help_text = (
-            "Phase 0: NPC对话 -> 领任务 -> 确认进入\n"
-            "Phase 1-4: 惊凡渊走路 + 传送门 -> 裂影渊 -> 泣魔渊 -> 陨仙渊\n"
-            "Phase 5-6: NPC扫描(洞渊战魂/百鬼之王) + 交/接任务 + Boss战\n"
-            "Phase 7: 任务列表 -> 确认 -> 瞬间传送 -> 提交任务\n"
+            "Phase 0: 进入副本(阳谷→惊凡渊)\n"
+            "Phase 1: 惊凡渊走路+传送门 → 裂影渊\n"
+            "Phase 2: 裂影渊 找洞渊战魂→交任务→接任务\n"
+            "Phase 3: 裂影渊 洞渊战魂Boss战→交任务→接任务\n"
+            "Phase 4: 裂影渊→泣魔渊 传送门\n"
+            "Phase 5: 泣魔渊→陨仙渊 走路+传送门\n"
+            "Phase 6: 陨仙渊 找百鬼之王→交任务→接任务\n"
+            "Phase 7: 陨仙渊 遇怪2场→找百鬼之王→交任务→接任务\n"
+            "Phase 8: 陨仙渊 百鬼之王Boss战→交任务→接任务×2\n"
+            "Phase 9: 陨仙渊→阳谷 传送出地图+提交任务\n"
             "使用条件: 角色需已在NPC面前，坐标基于1080x1920"
         )
         ttk.Label(tab, text=help_text, foreground="gray",
@@ -731,10 +760,21 @@ class App:
                 if "[DEBUG]" in line or "[INFO]" in line:
                     continue
                 self.root.after(0, self._log, line)
+                if "══ Phase " in line:
+                    try:
+                        n = int(line.split("══ Phase ")[1].split("/")[0])
+                        self.root.after(0, self._set_dev_phase, tab_key, dev, n)
+                    except Exception:
+                        pass
         except Exception:
             pass
         finally:
             self.root.after(0, self._on_worker_exit, dev, tab_key)
+
+    def _set_dev_phase(self, tab_key: str, dev: str, phase: int):
+        w = self._tab_row_widgets.get(tab_key, {}).get(dev)
+        if w:
+            w["status"].set(f"运行中 Phase {phase}/9")
 
     # ── 跑环 ─────────────────────────────────────
 
@@ -768,8 +808,31 @@ class App:
         if dev in self._workers:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
-        spec = {"task_type": "dungeon100"}
+        spec = {"task_type": "dungeon100",
+                "params": {"start_phase": self._dungeon100_start_phase(dev)}}
         self._start_worker("dungeon100", dev, spec)
+
+    def _dungeon100_start_phase(self, dev):
+        w = self._tab_row_widgets.get("dungeon100", {}).get(dev, {})
+        val = w.get("start_var", tk.StringVar(value="自动续跑")).get()
+        if val == "从头开始 (Phase 0)":
+            return 0
+        if val.startswith("Phase "):
+            try:
+                return int(val.split()[-1])
+            except Exception:
+                return None
+        return None  # 自动续跑
+
+    def _dungeon100_last_phase(self, dev):
+        serial = self._device_serial.get(dev, "")
+        safe = serial.replace(":", "_").replace("/", "_") if serial else "default"
+        path = os.path.join(BASE_DIR, "logs", f"dungeon100_state_{safe}.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return int(json.load(f).get("last_done_phase", -1))
+        except Exception:
+            return -1
 
     # ── 抓宠 ─────────────────────────────────────
 

@@ -21,7 +21,7 @@ class OCRClient:
     """连接共享 OCR 服务的客户端，readtext 接口兼容 easyocr.Reader"""
 
     def __init__(self, host: str = HOST, port: int = PORT):
-        self._sock = socket.create_connection((host, port), timeout=10)
+        self._sock = socket.create_connection((host, port), timeout=2)
         self._sock.settimeout(30)
         self._lock = threading.Lock()
 
@@ -80,9 +80,9 @@ def get_ocr_client() -> OCRClient:
                 _client = OCRClient()
                 return _client
             except Exception:
+                print("[OCR] 服务未运行，正在启动(首次加载模型约10-30秒)...", flush=True)
                 _start_service()
-                # 等服务加载模型（首次约 10 秒）
-                for _ in range(120):
+                for _ in range(60):
                     time.sleep(0.5)
                     try:
                         _client = OCRClient()
@@ -90,3 +90,16 @@ def get_ocr_client() -> OCRClient:
                     except Exception:
                         continue
         raise RuntimeError("无法连接 OCR 服务")
+
+
+def warmup():
+    """预热 OCR 服务（供后台线程调用）：拉起服务并尽量等待模型加载完成。"""
+    try:
+        import numpy as np
+        client = get_ocr_client()
+        print("[OCR] 服务已连接，等待模型加载...", flush=True)
+        dummy = np.zeros((16, 16, 3), dtype=np.uint8)
+        client.readtext(dummy)
+        print("[OCR] 预热完成，模型就绪", flush=True)
+    except Exception as e:
+        print(f"[OCR] 预热未完成(模型后台加载中，可忽略): {e}", flush=True)

@@ -40,7 +40,7 @@ def build_task(spec: dict):
         return DungeonTask(dungeon_id=p["dungeon_id"], rounds=p["rounds"], serial=serial)
     if t == "dungeon100":
         from tasks.dungeon100_task import Dungeon100Task
-        return Dungeon100Task(serial=serial)
+        return Dungeon100Task(serial=serial, start_phase=p.get("start_phase"))
     if t == "crystal":
         from tasks.crystal_task import CrystalTask
         return CrystalTask(serial=serial)

@@ -1,6 +1,7 @@
 """100副本任务 —— 惊凡渊走路+传送门，OCR实时战斗检测 + 裂影渊NPC扫描"""
 import time
 import os
+import json
 import subprocess
 import numpy as np
 import cv2
@@ -72,11 +73,12 @@ MAX_BATTLES = 2                  # 累计战斗次数
 class Dungeon100Task(BaseTask):
     """100副本自动任务 — 惊凡渊 -&gt; 裂影渊"""
 
-    def __init__(self, serial: str = ""):
+    def __init__(self, serial: str = "", start_phase: int = None):
         super().__init__("100副本")
         self._serial = serial
         self._reader = None
         self._battle_count = 0
+        self._start_phase = start_phase
 
     # ── OCR ────────────────────────────────────
 
@@ -522,69 +524,154 @@ class Dungeon100Task(BaseTask):
         self._submit_quest()
         self.log_key("  提交完成")
 
+    # ── 断点续跑 (状态文件) ──────────────────────
+
+    @property
+    def _state_file(self) -> str:
+        safe = self._serial.replace(":", "_").replace("/", "_") if self._serial else "default"
+        return os.path.join(LOG_DIR, f"dungeon100_state_{safe}.json")
+
+    def _load_progress(self) -> int:
+        """返回已完成的 Phase 编号，-1 表示无记录"""
+        try:
+            with open(self._state_file, "r", encoding="utf-8") as f:
+                return int(json.load(f).get("last_done_phase", -1))
+        except Exception:
+            return -1
+
+    def _save_progress(self, phase: int):
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            with open(self._state_file, "w", encoding="utf-8") as f:
+                json.dump({"last_done_phase": phase}, f)
+            self.log_key(f"[进度] Phase {phase}/9 完成")
+        except Exception as e:
+            self.log(f"  [进度] 保存失败: {e}")
+
+    def _clear_progress(self):
+        try:
+            if os.path.exists(self._state_file):
+                os.remove(self._state_file)
+                self.log_key("[进度] 已重置进度记录")
+        except Exception:
+            pass
+
+    def _log_phase(self, n: int, desc: str):
+        self.log_key(f"══ Phase {n}/9: {desc} ══")
+
     # ── 主流程 ─────────────────────────────────
 
     def run(self):
         self.log_key("100副本启动")
         self._battle_count = 0
 
-        # Phase 0: 阳谷 -&gt; 副本入口
-        self._enter_dungeon()
+        # 断点续跑: 确定起始 Phase
+        if self._start_phase is None:
+            done = self._load_progress()
+            start_phase = done + 1
+            if start_phase > 0:
+                self.log_key(f"[进度] 上次完成 Phase {done}，自动续跑 Phase {start_phase}")
+            else:
+                start_phase = 0
+        elif self._start_phase == 0:
+            self._clear_progress()
+            start_phase = 0
+            self.log_key("[进度] 已重置，从 Phase 0 开始")
+        else:
+            start_phase = self._start_phase
+            self.log_key(f"[进度] 手动从 Phase {start_phase} 开始")
 
-        # Phase 1: 惊凡渊 -&gt; 裂影渊
-        self._walk_phase()
-        self._portal_phase()
-        self.log_key(f"裂影渊到达! 累计 {self._battle_count} 场战斗")
+        # Phase 0: 阳谷 -&gt; 惊凡渊 进入副本
+        if start_phase <= 0:
+            self._log_phase(0, "进入副本")
+            self._enter_dungeon()
+            self._save_progress(0)
 
-        # Phase 2: 裂影渊 -&gt; 补战斗(不足2场) -&gt; 找洞渊战魂 -&gt; 交任务-&gt;接任务 -&gt; Boss战
-        if self._battle_count < 2:
-            remaining = 2 - self._battle_count
-            self.log_key(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
-            self._auto_battle_phase(remaining)
-        self._npc_phase(TARGET_NPC)
-        self._submit_quest()            # 5-&gt;5-&gt;* 交任务
-        self._accept_quest()            # 5-&gt;5-&gt;* 接任务 (触发洞渊战魂Boss战)
-        self.log_key("  等待洞渊战魂Boss战...")
-        self._wait_battle_end(is_boss=True)   # 打洞渊战魂Boss
-        self.log_key("  洞渊战魂击杀完成!")
-        self._submit_quest()            # 5-&gt;5-&gt;* 交任务
-        self._accept_quest()            # 5-&gt;5-&gt;* 接任务
-        self._battle_count = 0          # 裂影渊boss完成，重置进入下一区域
+        # Phase 1: 惊凡渊 -&gt; 裂影渊 走路+传送门
+        if start_phase <= 1:
+            self._log_phase(1, "惊凡渊→裂影渊 走路+传送门")
+            self._walk_phase()
+            self._portal_phase()
+            self._save_progress(1)
+            self.log_key(f"裂影渊到达! 累计 {self._battle_count} 场战斗")
 
-        # Phase 3: 裂影渊 -&gt; 泣魔渊
-        self._portal_phase()
-        self.log_key(f"泣魔渊到达!")
+        # Phase 2: 裂影渊 找洞渊战魂 -&gt; 交任务 -&gt; 接任务(触发Boss)
+        if start_phase <= 2:
+            self._log_phase(2, "裂影渊 找洞渊战魂→交任务→接任务")
+            if self._battle_count < 2:
+                remaining = 2 - self._battle_count
+                self.log_key(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
+                self._auto_battle_phase(remaining)
+            self._npc_phase(TARGET_NPC)
+            self._submit_quest()            # 5-&gt;5-&gt;* 交任务
+            self._accept_quest()            # 5-&gt;5-&gt;* 接任务 (触发洞渊战魂Boss战)
+            self._save_progress(2)
 
-        # Phase 4: 泣魔渊 -&gt; 陨仙渊
-        self._walk_phase()
-        self._portal_phase()
-        self.log_key(f"陨仙渊到达!")
+        # Phase 3: 裂影渊 洞渊战魂Boss战 -&gt; 交任务 -&gt; 接任务
+        if start_phase <= 3:
+            self._log_phase(3, "裂影渊 洞渊战魂Boss战→交任务→接任务")
+            self.log_key("  等待洞渊战魂Boss战...")
+            self._wait_battle_end(is_boss=True)   # 打洞渊战魂Boss
+            self.log_key("  洞渊战魂击杀完成!")
+            self._submit_quest()            # 5-&gt;5-&gt;* 交任务
+            self._accept_quest()            # 5-&gt;5-&gt;* 接任务
+            self._battle_count = 0          # 裂影渊boss完成，重置进入下一区域
+            self._save_progress(3)
 
-        # Phase 5: 陨仙渊 -&gt; 补战斗(不足2场) -&gt; 找百鬼之王 -&gt; 交任务-&gt;接任务
-        if self._battle_count < 2:
-            remaining = 2 - self._battle_count
-            self.log_key(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
-            self._auto_battle_phase(remaining)
-        self._npc_phase(TARGET_NPC2)
-        self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 5s
-        self._accept_quest()            # 5-&gt;5-&gt;*
-        self._battle_count = 0          # 重置，下一阶段重新累计
+        # Phase 4: 裂影渊 -&gt; 泣魔渊 传送门
+        if start_phase <= 4:
+            self._log_phase(4, "裂影渊→泣魔渊 传送门")
+            self._portal_phase()
+            self._save_progress(4)
+            self.log_key("泣魔渊到达!")
 
-        # Phase 6: 陨仙渊 -&gt; 自动遇怪2场 -&gt; 找百鬼之王 -&gt; 交任务-&gt;接任务 -&gt; Boss战 -&gt; 交任务-&gt;接任务(x2)
-        self._auto_battle_phase(2)
-        self._npc_phase(TARGET_NPC2)
-        self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 10s
-        self._accept_quest()            # 5-&gt;5-&gt;* (触发Boss战)
-        # Boss战
-        self.log_key("  等待Boss战...")
-        self._wait_battle_end(is_boss=True)
-        self.log_key("  Boss战结束!")
-        self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 10s
-        self._accept_quest()            # 5-&gt;5-&gt;*
-        self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 10s (最后一轮)
-        self._accept_quest()            # 5-&gt;5-&gt;*
+        # Phase 5: 泣魔渊 -&gt; 陨仙渊 走路+传送门
+        if start_phase <= 5:
+            self._log_phase(5, "泣魔渊→陨仙渊 走路+传送门")
+            self._walk_phase()
+            self._portal_phase()
+            self._save_progress(5)
+            self.log_key("陨仙渊到达!")
 
-        # Phase 7: 键1任务列表 -&gt; 追踪寻路 -&gt; 传送出地图 -&gt; 阳谷
-        self._quest_teleport()
+        # Phase 6: 陨仙渊 找百鬼之王 -&gt; 交任务 -&gt; 接任务
+        if start_phase <= 6:
+            self._log_phase(6, "陨仙渊 找百鬼之王→交任务→接任务")
+            if self._battle_count < 2:
+                remaining = 2 - self._battle_count
+                self.log_key(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
+                self._auto_battle_phase(remaining)
+            self._npc_phase(TARGET_NPC2)
+            self._submit_quest()            # 5-&gt;5-&gt;* 交任务
+            self._accept_quest()            # 5-&gt;5-&gt;* 接任务
+            self._battle_count = 0          # 重置，下一阶段重新累计
+            self._save_progress(6)
 
+        # Phase 7: 陨仙渊 遇怪2场 -&gt; 找百鬼之王 -&gt; 交任务 -&gt; 接任务(触发Boss)
+        if start_phase <= 7:
+            self._log_phase(7, "陨仙渊 遇怪2场→找百鬼之王→交任务→接任务")
+            self._auto_battle_phase(2)
+            self._npc_phase(TARGET_NPC2)
+            self._submit_quest()            # 5-&gt;5-&gt;* 交任务
+            self._accept_quest()            # 5-&gt;5-&gt;* 接任务 (触发Boss战)
+            self._save_progress(7)
+
+        # Phase 8: 陨仙渊 百鬼之王Boss战 -&gt; 交任务 -&gt; 接任务(x2)
+        if start_phase <= 8:
+            self._log_phase(8, "陨仙渊 百鬼之王Boss战→交任务→接任务×2")
+            self.log_key("  等待Boss战...")
+            self._wait_battle_end(is_boss=True)
+            self.log_key("  Boss战结束!")
+            self._submit_quest()            # 5-&gt;5-&gt;* 交任务
+            self._accept_quest()            # 5-&gt;5-&gt;* 接任务
+            self._submit_quest()            # 5-&gt;5-&gt;* 交任务(最后一轮)
+            self._accept_quest()            # 5-&gt;5-&gt;* 接任务
+            self._save_progress(8)
+
+        # Phase 9: 陨仙渊 -&gt; 阳谷 传送出地图+提交任务
+        if start_phase <= 9:
+            self._log_phase(9, "陨仙渊→阳谷 传送出地图+提交任务")
+            self._quest_teleport()
+            self._save_progress(9)
+
+        self._clear_progress()
         self.log_key(f"100副本流程完成! 累计 {self._battle_count} 场战斗")
