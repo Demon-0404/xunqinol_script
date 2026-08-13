@@ -4,7 +4,6 @@ import os
 import re
 import numpy as np
 from PIL import Image
-from airtest.core.api import touch, snapshot, keyevent
 from tasks.base_task import BaseTask
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,7 +59,7 @@ WAIT_QUEST = 1.5               # 任务追踪等待
 class DungeonTask(BaseTask):
     """副本自动任务 —— 90或100副本"""
 
-    def __init__(self, dungeon_id: int = 90, rounds: int = 3):
+    def __init__(self, dungeon_id: int = 90, rounds: int = 3, serial: str = ""):
         """
         dungeon_id: 90 或 100
         rounds: 每个副本刷几次（默认3次）
@@ -73,15 +72,16 @@ class DungeonTask(BaseTask):
         self.total_rounds = rounds
         self._round = 0
         self._ocr = None
+        self._serial = serial
 
     # ── OCR ────────────────────────────────────
 
     def _get_ocr(self):
         if self._ocr is None:
-            import easyocr
-            self.log("加载OCR模型...")
-            self._ocr = easyocr.Reader(['ch_sim'], gpu=False, verbose=False)
-            self.log("OCR模型就绪")
+            self.log_key("连接OCR共享服务...")
+            from core.ocr_client import get_ocr_client
+            self._ocr = get_ocr_client()
+            self.log_key("OCR服务就绪")
         return self._ocr
 
     # ── 截图 ───────────────────────────────────
@@ -89,16 +89,19 @@ class DungeonTask(BaseTask):
     def _screenshot_arr(self) -> np.ndarray:
         import subprocess
         adb = os.environ.get("ANDROID_ADB", "adb")
-        tmp = os.path.join(LOG_DIR, "_dungeon_tmp.png")
+        tmp = os.path.join(LOG_DIR, f"_dungeon_tmp_{os.getpid()}.png")
+        adb_args = [adb]
+        if self._serial:
+            adb_args += ["-s", self._serial]
         try:
-            subprocess.run([adb, "shell", "screencap", "-p", "/sdcard/sc.png"],
-                          capture_output=True, timeout=5)
-            subprocess.run([adb, "pull", "/sdcard/sc.png", tmp],
-                          capture_output=True, timeout=5)
+            with open(tmp, "wb") as f:
+                subprocess.run(
+                    adb_args + ["exec-out", "screencap", "-p"],
+                    stdout=f, stderr=subprocess.DEVNULL, timeout=5)
             return np.array(Image.open(tmp))[:, :, :3]
         except Exception:
             try:
-                filename = snapshot()
+                filename = self._safe_snapshot()
                 if filename is None:
                     raise RuntimeError("snapshot returned None")
                 return np.array(Image.open(filename))[:, :, :3]
@@ -136,7 +139,7 @@ class DungeonTask(BaseTask):
         x, y = pos
         label = f"{desc}({x},{y})" if desc else f"({x},{y})"
         self.log(f"  点击 {label}")
-        touch(pos)
+        self._safe_touch(pos)
         time.sleep(wait)
 
     def _tap_key5(self):
@@ -146,13 +149,13 @@ class DungeonTask(BaseTask):
     # ── 主流程 ─────────────────────────────────
 
     def run(self):
-        self.log(f"副本{dungeon_id} 自动任务启动，共 {self.total_rounds} 轮")
+        self.log_key(f"副本{dungeon_id} 自动任务启动，共 {self.total_rounds} 轮")
 
         for r in range(self.total_rounds):
             if not self._running:
                 break
             self._round = r + 1
-            self.log(f"══════ 第 {self._round}/{self.total_rounds} 轮 ══════")
+            self.log_key(f"══════ 第 {self._round}/{self.total_rounds} 轮 ══════")
             try:
                 self._do_one_round()
             except Exception as e:
@@ -161,7 +164,7 @@ class DungeonTask(BaseTask):
                 self.log(traceback.format_exc())
 
         if self._running:
-            self.log(f"副本{dungeon_id} 全部完成! 共 {self.total_rounds} 轮")
+            self.log_key(f"副本{dungeon_id} 全部完成! 共 {self.total_rounds} 轮")
 
     def _do_one_round(self):
         """执行一轮完整副本"""
@@ -174,7 +177,7 @@ class DungeonTask(BaseTask):
 
     def _enter_dungeon(self):
         """固定坐标流程：备忘→副本列表→选副本→传送→领任务→进入"""
-        self.log("── 进入副本 ──")
+        self.log_key("── 进入副本 ──")
 
         # 1. 打开备忘
         self._tap(STEP_MEMO, "备忘", WAIT_PAGE)
@@ -210,13 +213,13 @@ class DungeonTask(BaseTask):
         time.sleep(0.5)
         self._tap(STEP_ENTER_CONFIRM, "缴费进入", WAIT_TELEPORT)
 
-        self.log("  已进入副本 ✓")
+        self.log_key("  已进入副本 ✓")
 
     # ── 步骤 12-13: 自动遇怪 + 监控 ─────────────
 
     def _auto_combat_loop(self):
         """按数字键0开启自动遇怪，OCR监控剩余场数，归零后继续"""
-        self.log("── 自动遇怪 ──")
+        self.log_key("── 自动遇怪 ──")
 
         # 12. 按数字键0 开启自动遇怪
         self._tap(STEP_AUTO_COMBAT, "自动遇怪(0)", WAIT_COMBAT_CHECK)
@@ -250,7 +253,7 @@ class DungeonTask(BaseTask):
             else:
                 miss_count += 1
                 if miss_count >= 6:  # 连续3秒没有"剩"字
-                    self.log("  战斗计数消失，所有怪物已清除 ✓")
+                    self.log_key("  战斗计数消失，所有怪物已清除 ✓")
                     break
 
             time.sleep(WAIT_COMBAT_CHECK)
@@ -266,13 +269,13 @@ class DungeonTask(BaseTask):
             else:
                 break
 
-        self.log("  自动遇怪阶段完成 ✓")
+        self.log_key("  自动遇怪阶段完成 ✓")
 
     # ── 步骤 14: Boss ──────────────────────────
 
     def _kill_boss(self):
         """任务列表→寻路Boss→击杀→结算"""
-        self.log("── Boss战 ──")
+        self.log_key("── Boss战 ──")
 
         # 打开任务列表
         self._tap(QUEST_BTN, "任务", WAIT_PAGE)
@@ -291,7 +294,7 @@ class DungeonTask(BaseTask):
         for _ in range(10):
             time.sleep(0.5)
             if self._check_text_at("回合", (500, 200), 200):
-                self.log("  进入Boss战!")
+                self.log_key("  进入Boss战!")
                 break
 
         # 战斗中自动打，等待结算弹窗
@@ -299,7 +302,7 @@ class DungeonTask(BaseTask):
             if not self._running:
                 return
             if self._check_text_at("胜利", (500, 500), 200):
-                self.log("  战斗胜利!")
+                self.log_key("  战斗胜利!")
                 break
             time.sleep(0.5)
 
@@ -310,11 +313,11 @@ class DungeonTask(BaseTask):
             if not self._check_text_at("按5键继续", (500, 950), 200):
                 break
 
-        self.log("  Boss战完成 ✓")
+        self.log_key("  Boss战完成 ✓")
 
     def _exit_dungeon(self):
         """退出副本，结算"""
-        self.log("── 退出副本 ──")
+        self.log_key("── 退出副本 ──")
 
         # 可能有退出确认按钮
         for _ in range(5):
@@ -330,4 +333,4 @@ class DungeonTask(BaseTask):
             self._tap_key5()
             time.sleep(0.5)
 
-        self.log("  副本完成 ✓")
+        self.log_key("  副本完成 ✓")

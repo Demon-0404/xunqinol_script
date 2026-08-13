@@ -1,6 +1,5 @@
 """打泼猴任务 —— 点击泼猴→夺回玉帛→战斗→结算→循环"""
 import time
-from airtest.core.api import touch
 from tasks.base_task import BaseTask
 
 
@@ -24,21 +23,21 @@ class MonkeyTask(BaseTask):
         self.log(f"泼猴:{self._monkey_pos} 夺回玉帛:{self._option_pos} 确认:{self._confirm_pos}")
         while self._running:
             # 1. 点击泼猴对话
-            touch(self._monkey_pos)
+            self._safe_touch(self._monkey_pos)
             time.sleep(self.WAIT_DIALOG)
 
             # 2. 双击夺回玉帛确认
-            touch(self._option_pos)
+            self._safe_touch(self._option_pos)
             time.sleep(self.WAIT_CONFIRM)
-            touch(self._option_pos)
+            self._safe_touch(self._option_pos)
             self._count += 1
 
             # 3. 等待战斗 + 结算弹出
             time.sleep(self.WAIT_BATTLE)
 
             # 4. 点击确认关闭结算
-            touch(self._confirm_pos)
-            self.log(f"第{self._count}次完成，等待下一轮...")
+            self._safe_touch(self._confirm_pos)
+            self.log_key(f"第{self._count}次完成，等待下一轮...")
             time.sleep(self.WAIT_SETTLE)
 
-        self.log(f"结束，共完成 {self._count} 次")
+        self.log_key(f"结束，共完成 {self._count} 次")

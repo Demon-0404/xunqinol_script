@@ -180,23 +180,15 @@ def scan_available_devices() -> list[dict]:
 def connect_device_by_serial(name: str, serial: str) -> tuple[bool, str]:
     """连接指定序列号的设备，返回 (成功, 错误信息)"""
     import traceback
+    global _current_serial
     try:
-        # 如果已有不同 serial 的设备连接，先用 ADB 断开旧连接
-        for ename, info in list(_devices.items()):
-            old_serial = info.get("serial", "")
-            if old_serial and old_serial != serial and info.get("connected"):
-                subprocess.run(
-                    [_adb_path(), "disconnect", old_serial],
-                    capture_output=True, timeout=3
-                )
-                info["connected"] = False
-
-        # 确保 ADB 已连接
+        # 确保 ADB 已连接（不再断开其他设备，支持多设备并存）
         _try_connect(serial)
 
         uri = f"Android:///{serial}"
         connect_device(uri)
         _devices[name] = {"serial": serial, "connected": True}
+        _current_serial = serial
         return True, ""
     except Exception as e:
         _devices[name] = {"serial": serial, "connected": False}
@@ -206,17 +198,24 @@ def connect_device_by_serial(name: str, serial: str) -> tuple[bool, str]:
         return False, err
 
 
+_current_serial = None
+
+
 def switch_device(name: str) -> bool:
     """切换到指定设备 —— 直接用 connect_device 切换（airtest 不支持多设备 set_current）"""
+    global _current_serial
     if name not in _devices:
         print(f"设备 {name} 未连接")
         return False
     info = _devices[name]
     if not info.get("connected"):
         return False
+    if _current_serial == info["serial"]:
+        return True
     try:
         uri = f"Android:///{info['serial']}"
         connect_device(uri)
+        _current_serial = info["serial"]
         return True
     except Exception as e:
         print(f"切换设备失败: {e}")
@@ -229,6 +228,12 @@ def list_devices() -> dict:
         name: {"serial": d["serial"], "connected": d["connected"]}
         for name, d in _devices.items()
     }
+
+
+def get_device_serial(name: str) -> str:
+    """获取设备序列号"""
+    info = _devices.get(name, {})
+    return info.get("serial", "")
 
 
 def get_device_info(name: str = None) -> dict:

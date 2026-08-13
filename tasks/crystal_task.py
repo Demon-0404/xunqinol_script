@@ -4,7 +4,6 @@ import os
 import subprocess
 import numpy as np
 from PIL import Image
-from airtest.core.api import touch, snapshot
 from tasks.base_task import BaseTask
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,32 +37,29 @@ class CrystalTask(BaseTask):
 
     def _get_ocr(self):
         if self._ocr is None:
-            import easyocr
-            self.log("[初始化] 加载OCR模型...")
-            self._ocr = easyocr.Reader(['ch_sim'], gpu=False, verbose=False)
-            self.log("[初始化] OCR模型就绪")
+            self.log_key("[初始化] 连接OCR共享服务...")
+            from core.ocr_client import get_ocr_client
+            self._ocr = get_ocr_client()
+            self.log_key("[初始化] OCR服务就绪")
         return self._ocr
 
     # ── 截图 ───────────────────────────────────
 
     def _screenshot_arr(self) -> np.ndarray | None:
-        tmp = os.path.join(LOG_DIR, "_crystal_tmp.png")
+        tmp = os.path.join(LOG_DIR, f"_crystal_tmp_{os.getpid()}.png")
         adb_args = [self._adb]
         if self._serial:
             adb_args += ["-s", self._serial]
         try:
-            subprocess.run(
-                adb_args + ["shell", "screencap", "-p", "/sdcard/sc.png"],
-                capture_output=True, timeout=5
-            )
-            subprocess.run(
-                adb_args + ["pull", "/sdcard/sc.png", tmp],
-                capture_output=True, timeout=5
-            )
+            with open(tmp, "wb") as f:
+                subprocess.run(
+                    adb_args + ["exec-out", "screencap", "-p"],
+                    stdout=f, stderr=subprocess.DEVNULL, timeout=5
+                )
             return np.array(Image.open(tmp))[:, :, :3]
         except Exception:
             try:
-                filename = snapshot()
+                filename = self._safe_snapshot()
                 if filename:
                     return np.array(Image.open(filename))[:, :, :3]
             except Exception:
@@ -100,7 +96,7 @@ class CrystalTask(BaseTask):
 
     def run(self):
         self.log("=" * 40)
-        self.log("水晶刷怪任务启动")
+        self.log_key("水晶刷怪任务启动")
         self.log(f"  检测区域: {MEMO_REGION}")
         self.log(f"  关键词: \"{MEMO_KEYWORD}\"")
         self.log(f"  逻辑: 连续{CONSECUTIVE_LIMIT}次({CONSECUTIVE_LIMIT * CHECK_INTERVAL:.0f}s)可见 → 按KEY0")
@@ -122,17 +118,17 @@ class CrystalTask(BaseTask):
                 self.log(f"[#{consecutive}] 备忘可见 (非战斗) | 轮:{self._round_count}")
 
                 if consecutive >= CONSECUTIVE_LIMIT:
-                    self.log(f"  → 连续{CONSECUTIVE_LIMIT}次({CONSECUTIVE_LIMIT * CHECK_INTERVAL:.0f}s)可见，自动遇怪已停!")
+                    self.log_key(f"  → 连续{CONSECUTIVE_LIMIT}次({CONSECUTIVE_LIMIT * CHECK_INTERVAL:.0f}s)可见，自动遇怪已停!")
                     self._round_count += 1
-                    self.log(f"  → 按KEY0 开启第{self._round_count}轮自动遇怪")
-                    touch(KEY0)
+                    self.log_key(f"  → 按KEY0 开启第{self._round_count}轮自动遇怪")
+                    self._safe_touch(KEY0)
                     time.sleep(KEY0_COOLDOWN)
                     consecutive = 0
             else:
                 if consecutive > 0:
-                    self.log(f"  → 备忘消失，进入战斗! (之前连续{consecutive}次可见)")
+                    self.log_key(f"  → 备忘消失，进入战斗! (之前连续{consecutive}次可见)")
                 consecutive = 0
 
             time.sleep(CHECK_INTERVAL)
 
-        self.log(f"水晶刷怪结束，共完成 {self._round_count} 轮")
+        self.log_key(f"水晶刷怪结束，共完成 {self._round_count} 轮")

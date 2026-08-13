@@ -82,7 +82,7 @@ class ChumoTask(BaseTask):
 
     def _screenshot_arr(self) -> np.ndarray:
         adb = self._adb()
-        tmp = os.path.join(LOG_DIR, "_chumo_tmp.png")
+        tmp = os.path.join(LOG_DIR, f"_chumo_tmp_{os.getpid()}.png")
         args = [adb]
         if self._serial:
             args += ["-s", self._serial]
@@ -90,7 +90,7 @@ class ChumoTask(BaseTask):
             with open(tmp, "wb") as f:
                 subprocess.run(
                     args + ["exec-out", "screencap", "-p"],
-                    stdout=f, capture_output=True, timeout=5)
+                    stdout=f, stderr=subprocess.DEVNULL, timeout=5)
             return np.array(Image.open(tmp))[:, :, :3]
         except Exception:
             subprocess.run(
@@ -103,10 +103,10 @@ class ChumoTask(BaseTask):
 
     def _get_reader(self):
         if self._reader is None:
-            import easyocr
-            self.log("加载OCR模型...")
-            self._reader = easyocr.Reader(['ch_sim'], gpu=False, verbose=False)
-            self.log("OCR模型就绪")
+            self.log_key("连接OCR共享服务...")
+            from core.ocr_client import get_ocr_client
+            self._reader = get_ocr_client()
+            self.log_key("OCR服务就绪")
         return self._reader
 
     # ── OCR 辅助 ────────────────────────────────
@@ -266,7 +266,7 @@ class ChumoTask(BaseTask):
         move_triggered = False
         while time.time() - start < 30 and self._running:
             if self._is_in_battle():
-                self.log("  进入战斗!")
+                self.log_key("  进入战斗!")
                 break
             # 5s 没检测到战斗 → 点击数字键0
             if not move_triggered and time.time() - start >= MOVE_AROUND_TIMEOUT:
@@ -281,7 +281,7 @@ class ChumoTask(BaseTask):
             if not self._is_in_battle():
                 miss_count += 1
                 if miss_count >= 2:
-                    self.log("  战斗结束!")
+                    self.log_key("  战斗结束!")
                     return
             else:
                 miss_count = 0
@@ -292,7 +292,7 @@ class ChumoTask(BaseTask):
 
     def _accept_quest(self):
         """接取任务: 打开NPC列表 → 找大使 → 确认寻路 → 对话 → 进入"""
-        self.log("── 接取任务 ──")
+        self.log_key("── 接取任务 ──")
 
         # 打开NPC列表(带验证)
         if not self._open_npc_list():
@@ -331,7 +331,7 @@ class ChumoTask(BaseTask):
 
     def _teleport_to_monster(self):
         """传送: 任务列表 → 确认 → 传送 → 确认"""
-        self.log("── 传送 ──")
+        self.log_key("── 传送 ──")
         self._touch(KEY1, "数字键1任务")
         self._touch(CONFIRM, "确认")
         self._touch(KEY2, "数字键2传送")
@@ -340,7 +340,7 @@ class ChumoTask(BaseTask):
 
     def _submit_quest(self):
         """战后: 任务列表 → 传送回大使 → 交任务"""
-        self.log("── 战后传送+交任务 ──")
+        self.log_key("── 战后传送+交任务 ──")
         # 打开任务列表传送回大使身边
         self._touch(KEY1, "数字键1任务")
         self._touch(CONFIRM, "确认")
@@ -358,13 +358,13 @@ class ChumoTask(BaseTask):
     # ── 主循环 ──────────────────────────────────
 
     def run(self):
-        self.log(f"仗剑除魔启动，共 {self.TOTAL_ROUNDS} 轮")
+        self.log_key(f"仗剑除魔启动，共 {self.TOTAL_ROUNDS} 轮")
 
         for r in range(1, self.TOTAL_ROUNDS + 1):
             if not self._running:
                 break
             self._round = r
-            self.log(f"══════ 第 {r}/{self.TOTAL_ROUNDS} 轮 ══════")
+            self.log_key(f"══════ 第 {r}/{self.TOTAL_ROUNDS} 轮 ══════")
 
             try:
                 self._accept_quest()
@@ -372,11 +372,11 @@ class ChumoTask(BaseTask):
                 self._wait_battle()
                 self._submit_quest()
 
-                self.log(f"第{r}轮完成 ✓")
+                self.log_key(f"第{r}轮完成 ✓")
             except Exception as e:
                 self.log(f"第{r}轮异常: {e}")
                 import traceback
                 self.log(traceback.format_exc())
 
         if self._running:
-            self.log(f"仗剑除魔全部完成! 共 {self.TOTAL_ROUNDS} 轮")
+            self.log_key(f"仗剑除魔全部完成! 共 {self.TOTAL_ROUNDS} 轮")

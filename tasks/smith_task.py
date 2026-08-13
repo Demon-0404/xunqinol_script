@@ -1,6 +1,5 @@
 """名匠石磨兑换任务 —— 与NPC对话→选第3项→连点确认→循环"""
 import time
-from airtest.core.api import touch
 from tasks.base_task import BaseTask
 
 
@@ -27,11 +26,11 @@ class SmithTask(BaseTask):
             for i, (x, y) in enumerate(self.STEPS):
                 if not self._running:
                     break
-                touch((x, y))
+                self._safe_touch((x, y))
                 time.sleep(self.WAIT_CLICK)
 
             self._count += 1
-            self.log(f"第{self._count}轮完成")
+            self.log_key(f"第{self._count}轮完成")
             time.sleep(self.WAIT_ROUND)
 
-        self.log(f"结束，共完成 {self._count} 轮")
+        self.log_key(f"结束，共完成 {self._count} 轮")

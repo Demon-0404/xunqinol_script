@@ -20,7 +20,7 @@ class WalkDemo(BaseTask):
         self.joy_y = joy_y
 
     def run(self):
-        self.log(f"开始走路: 方向={self.direction}, 步数={self.steps}, 模式={'摇杆' if self.use_joystick else '点击地面'}")
+        self.log_key(f"开始走路: 方向={self.direction}, 步数={self.steps}, 模式={'摇杆' if self.use_joystick else '点击地面'}")
         while self._running:
             if self.use_joystick:
                 walk_joystick(self.direction, steps=self.steps,

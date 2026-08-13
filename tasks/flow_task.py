@@ -2,7 +2,7 @@
 import time
 import os
 from tasks.base_task import BaseTask
-from airtest.core.api import touch, exists, Template
+from airtest.core.api import Template
 
 
 class FlowTask(BaseTask):
@@ -35,7 +35,7 @@ class FlowTask(BaseTask):
         self.loop = loop
 
     def run(self):
-        self.log(f"{self.name} 启动，共 {len(self.steps)} 个步骤")
+        self.log_key(f"{self.name} 启动，共 {len(self.steps)} 个步骤")
         while self._running:
             for i, step in enumerate(self.steps):
                 if not self._running:
@@ -44,7 +44,7 @@ class FlowTask(BaseTask):
                 wait_sec = step.get("wait", 2.0)
                 desc = step.get("desc", f"步骤{i+1}")
 
-                self.log(f"  [{i+1}/{len(self.steps)}] {desc} ...")
+                self.log_key(f"  [{i+1}/{len(self.steps)}] {desc} ...")
 
                 if not os.path.exists(tmpl_path):
                     self.log(f"    模板不存在: {step['template']}，跳过")
@@ -52,9 +52,9 @@ class FlowTask(BaseTask):
                     continue
 
                 tmpl = Template(tmpl_path)
-                pos = exists(tmpl)
+                pos = self._safe_exists(tmpl)
                 if pos:
-                    touch(pos)
+                    self._safe_touch(pos)
                     self.log(f"    点击 ({int(pos[0])}, {int(pos[1])})")
                 else:
                     self.log(f"    未找到，等待 {wait_sec}s")
@@ -62,5 +62,5 @@ class FlowTask(BaseTask):
                 time.sleep(wait_sec)
 
             if not self.loop:
-                self.log(f"{self.name} 完成")
+                self.log_key(f"{self.name} 完成")
                 break

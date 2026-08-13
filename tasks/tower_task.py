@@ -3,7 +3,6 @@ import time
 import os
 import numpy as np
 from PIL import Image, ImageDraw
-from airtest.core.api import touch as _air_touch, exists, Template, snapshot
 from airtest.core.settings import Settings as ST
 from tasks.base_task import BaseTask
 
@@ -104,10 +103,10 @@ class TowerTask(BaseTask):
 
     def _get_reader(self):
         if self._reader is None:
-            import easyocr
-            self.log("加载OCR模型...")
-            self._reader = easyocr.Reader(['ch_sim'], gpu=False, verbose=False)
-            self.log("OCR模型就绪")
+            self.log_key("连接OCR共享服务...")
+            from core.ocr_client import get_ocr_client
+            self._reader = get_ocr_client()
+            self.log_key("OCR服务就绪")
         return self._reader
 
     # ── 调试触摸 ────────────────────────────────
@@ -141,13 +140,13 @@ class TowerTask(BaseTask):
             except Exception:
                 pass
 
-        _air_touch(pos)
+        self._safe_touch(pos)
 
     # ── 楼层检测 ────────────────────────────────
 
     def _detect_current_floor(self) -> int | None:
         """扫描NPC列表第一个怪物，反查属于哪一层，用于断点续打"""
-        self.log("  检测当前所在层...")
+        self.log_key("  检测当前所在层...")
         all_names = [n for names in FLOOR_MONSTERS.values() for n in names]
         saved = self._known_names
         self._known_names = all_names
@@ -162,20 +161,21 @@ class TowerTask(BaseTask):
                 continue
             for floor, names in FLOOR_MONSTERS.items():
                 if name in names:
-                    self.log(f"  检测到: {name} → 第{floor}层")
+                    self.log_key(f"  检测到: {name} → 第{floor}层")
                     return floor
 
-        self.log("  无法检测当前层，从第1层开始")
+        self.log_key("  无法检测当前层，从第1层开始")
         return None
 
     # ── 主循环 ────────────────────────────────
 
     def run(self):
+        self._get_reader()  # 预热OCR模型，避免第一次点击后卡顿
         start_floor = self._detect_current_floor() or 1
         for floor in range(start_floor, self.TOTAL_FLOORS + 1):
             if not self._running:
                 break
-            self.log(f"══════ 第 {floor} 层 ══════")
+            self.log_key(f"══════ 第 {floor} 层 ══════")
             self._known_names = FLOOR_MONSTERS.get(floor, [])
             self._clear_floor(floor)
             if not self._running:
@@ -183,7 +183,7 @@ class TowerTask(BaseTask):
             if floor < self.TOTAL_FLOORS:
                 self._go_next_floor(floor)
         if self._running:
-            self.log(f"玄兵塔全部通关! 共击败 {self._cleared} 个怪物")
+            self.log_key(f"玄兵塔全部通关! 共击败 {self._cleared} 个怪物")
 
     def _clear_floor(self, floor: int):
         page = 1
@@ -193,7 +193,7 @@ class TowerTask(BaseTask):
             result = self._scan_and_kill(floor)
 
             if result == "boss":
-                self.log(f"  ✓ 本层Boss已击杀")
+                self.log_key(f"  ✓ 本层Boss已击杀")
                 break
 
             if not result:
@@ -203,10 +203,10 @@ class TowerTask(BaseTask):
                 page += 1
                 result2 = self._scan_and_kill(floor)
                 if result2 == "boss":
-                    self.log(f"  ✓ 本层Boss已击杀")
+                    self.log_key(f"  ✓ 本层Boss已击杀")
                     break
                 if not result2:
-                    self.log(f"  第{page}页也无怪物 → 本层已清完")
+                    self.log_key(f"  第{page}页也无怪物 → 本层已清完")
                     break
 
     def _scan_and_kill(self, floor: int):
@@ -221,7 +221,7 @@ class TowerTask(BaseTask):
             return False
 
         name, y = valid[0]
-        self.log(f"  >>> {name} (Y={y})")
+        self.log_key(f"  >>> {name} (Y={y})")
 
         boss_name = FLOOR_MONSTERS[floor][-1]
         is_boss = _fuzzy_match(name, [boss_name]) is not None
@@ -295,21 +295,19 @@ class TowerTask(BaseTask):
     def _screenshot_arr(self) -> np.ndarray:
         import subprocess
         adb = os.environ.get("ANDROID_ADB", "adb")
-        tmp = os.path.join(LOG_DIR, "_tower_tmp.png")
+        tmp = os.path.join(LOG_DIR, f"_tower_tmp_{os.getpid()}.png")
         adb_args = [adb]
         if self._serial:
             adb_args += ["-s", self._serial]
         try:
-            subprocess.run(
-                adb_args + ["shell", "screencap", "-p", "/sdcard/sc.png"],
-                capture_output=True, timeout=5)
-            subprocess.run(
-                adb_args + ["pull", "/sdcard/sc.png", tmp],
-                capture_output=True, timeout=5)
+            with open(tmp, "wb") as f:
+                subprocess.run(
+                    adb_args + ["exec-out", "screencap", "-p"],
+                    stdout=f, stderr=subprocess.DEVNULL, timeout=5)
             return np.array(Image.open(tmp))[:, :, :3]
         except Exception:
             try:
-                filename = snapshot()
+                filename = self._safe_snapshot()
                 if filename is None:
                     raise RuntimeError("snapshot returned None")
                 return np.array(Image.open(filename))[:, :, :3]
@@ -502,7 +500,7 @@ class TowerTask(BaseTask):
         for _ in range(6):
             time.sleep(0.5)
             if self._is_in_battle():
-                self.log("    进入战斗!")
+                self.log_key("    进入战斗!")
                 self.log(f"    战斗中...")
                 self._wait_for_round_disappear()
                 break
@@ -544,7 +542,7 @@ class TowerTask(BaseTask):
             if not self._is_in_battle():
                 miss_count += 1
                 if miss_count >= 2:  # 每次检测3-4s，2次=6-8s足够确认
-                    self.log("    战斗结束!")
+                    self.log_key("    战斗结束!")
                     return True
             else:
                 miss_count = 0
@@ -677,11 +675,11 @@ class TowerTask(BaseTask):
 
             # 验证是否真的到了新楼层
             if self._verify_floor(floor + 1):
-                self.log(f"  已进入第{floor + 1}层 ✓")
+                self.log_key(f"  已进入第{floor + 1}层 ✓")
                 return
             self.log(f"  跳转未生效，仍在第{floor}层，重试...")
 
-        self.log(f"  已进入第{floor + 1}层 (多次尝试后)")
+        self.log_key(f"  已进入第{floor + 1}层 (多次尝试后)")
 
     def _verify_floor(self, target_floor: int) -> bool:
         """快速扫描NPC列表，验证是否到达目标楼层"""

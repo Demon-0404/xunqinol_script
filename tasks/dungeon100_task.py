@@ -5,7 +5,6 @@ import subprocess
 import numpy as np
 import cv2
 from PIL import Image
-from airtest.core.api import touch
 from tasks.base_task import BaseTask
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -83,10 +82,10 @@ class Dungeon100Task(BaseTask):
 
     def _get_reader(self):
         if self._reader is None:
-            import easyocr
-            self.log("加载OCR模型...")
-            self._reader = easyocr.Reader(['ch_sim'], gpu=False, verbose=False)
-            self.log("OCR模型就绪")
+            self.log_key("连接OCR共享服务...")
+            from core.ocr_client import get_ocr_client
+            self._reader = get_ocr_client()
+            self.log_key("OCR服务就绪")
         return self._reader
 
     def _screenshot_arr(self) -> np.ndarray:
@@ -95,17 +94,15 @@ class Dungeon100Task(BaseTask):
         import shutil
         if not shutil.which(adb):
             adb = r"D:\Setup_and_Downloads\Setup\MuMuPlayer\nx_main\adb.exe"
-        tmp = os.path.join(LOG_DIR, "_dungeon100_tmp.png")
+        tmp = os.path.join(LOG_DIR, f"_dungeon100_tmp_{os.getpid()}.png")
         adb_args = [adb]
         if self._serial:
             adb_args += ["-s", self._serial]
         try:
-            subprocess.run(
-                adb_args + ["shell", "screencap", "-p", "/sdcard/sc.png"],
-                capture_output=True, timeout=5)
-            subprocess.run(
-                adb_args + ["pull", "/sdcard/sc.png", tmp],
-                capture_output=True, timeout=5)
+            with open(tmp, "wb") as f:
+                subprocess.run(
+                    adb_args + ["exec-out", "screencap", "-p"],
+                    stdout=f, stderr=subprocess.DEVNULL, timeout=5)
             return np.array(Image.open(tmp))[:, :, :3]
         except Exception:
             return None
@@ -170,17 +167,17 @@ class Dungeon100Task(BaseTask):
         if wait is None:
             wait = WAIT_CLICK
         self.log(f"  点击 {desc}{pos}")
-        touch(pos)
+        self._safe_touch(pos)
         time.sleep(wait)
 
     def _tap_key5(self):
-        touch(KEY5)
+        self._safe_touch(KEY5)
         time.sleep(0.3)
 
     # ── 战斗循环 ────────────────────────────────
 
-    def _wait_battle_end(self):
-        self.log(f"  检测到战斗! 等待结束... (第{self._battle_count + 1}场)")
+    def _wait_battle_end(self, is_boss: bool = False):
+        self.log_key(f"  检测到战斗! 等待结束... (第{self._battle_count + 1}场)")
         miss = 0
         while self._running:
             if self._is_in_battle():
@@ -188,10 +185,18 @@ class Dungeon100Task(BaseTask):
             else:
                 miss += 1
                 if miss >= 2:
-                    self._battle_count += 1
-                    self.log(f"  战斗结束! 累计 {self._battle_count}/{MAX_BATTLES} 场")
+                    if is_boss:
+                        self.log_key("  Boss战结束!")
+                    else:
+                        self._battle_count += 1
+                        self.log_key(f"  战斗结束! 累计 {self._battle_count}/{MAX_BATTLES} 场")
                     break
             time.sleep(BATTLE_CHECK_INTERVAL)
+
+        if is_boss:
+            # Boss战结束不点结算弹窗，避免打乱后续流程，只延时
+            time.sleep(8.0)
+            return
 
         # 结算弹窗
         time.sleep(1.0)
@@ -206,7 +211,7 @@ class Dungeon100Task(BaseTask):
 
     def _enter_dungeon(self):
         """NPC对话-&gt;领任务-&gt;进入副本（角色需已在NPC面前）"""
-        self.log("── Phase 0: 进入副本 ──")
+        self.log_key("── Phase 0: 进入副本 ──")
 
         self._tap(KEY5, "NPC对话(5)", WAIT_DIALOG)
         self._tap(KEY5, "进入领任务(5)", WAIT_DIALOG)
@@ -216,13 +221,13 @@ class Dungeon100Task(BaseTask):
         time.sleep(0.5)
         self._tap(STEP_ENTER_CONFIRM, "缴费进入", WAIT_TELEPORT)
 
-        self.log("已进入100副本")
+        self.log_key("已进入100副本")
 
     # ── 走路阶段 ────────────────────────────────
 
     def _walk_phase(self):
         """走路到右下角"""
-        self.log("── 走路阶段: 往右下角 ──")
+        self.log_key("── 走路阶段: 往右下角 ──")
         clicks = 0
         while clicks < MAX_STEPS_WALK and self._running:
             if self._is_in_battle():
@@ -253,7 +258,7 @@ class Dungeon100Task(BaseTask):
 
     def _portal_phase(self):
         """点击传送门进入裂影渊，检测地图名变化停止"""
-        self.log("── 传送门阶段: 前往裂影渊 ──")
+        self.log_key("── 传送门阶段: 前往裂影渊 ──")
         clicks = 0
         original_map = self._get_map_name()
         self.log(f"  当前地图: '{original_map}'")
@@ -303,7 +308,7 @@ class Dungeon100Task(BaseTask):
         for cx, cy in CANCEL_PANELS:
             if self._check_text_at("取消", (cx, cy), 100):
                 self.log(f"  检测到误开面板 @({cx},{cy})，点击取消关闭")
-                touch((cx, cy))
+                self._safe_touch((cx, cy))
                 time.sleep(0.5)
                 return True
         return False
@@ -324,7 +329,7 @@ class Dungeon100Task(BaseTask):
         """打开周围列表-&gt;NPC标签"""
         for retry in range(3):
             self.log(f"  打开周围列表... (尝试{retry + 1}/3)")
-            touch(NEARBY_BTN)
+            self._safe_touch(NEARBY_BTN)
             time.sleep(1.5)
             if self._check_text_at("周围列表", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
                 self.log("  '周围列表'已打开")
@@ -333,7 +338,7 @@ class Dungeon100Task(BaseTask):
                 self._dismiss_panels()
                 time.sleep(0.5)
                 continue
-            touch(NPC_TAB)
+            self._safe_touch(NPC_TAB)
             time.sleep(1.2)
             if self._verify_npc_panel():
                 return
@@ -408,7 +413,7 @@ class Dungeon100Task(BaseTask):
 
             if page < 4:
                 self.log(f"  第{page}页未找到，翻页...")
-                touch(NEXT_PAGE)
+                self._safe_touch(NEXT_PAGE)
                 time.sleep(0.8)
             else:
                 self.log(f"  翻页{page}次仍未找到'{target}'")
@@ -424,14 +429,14 @@ class Dungeon100Task(BaseTask):
             return
         name, y = result
         self.log(f"  点击NPC: '{name}' @ Y={y}")
-        touch((ROW_X, y))
+        self._safe_touch((ROW_X, y))
         time.sleep(0.5)
         if y == ROW_Y_START:
-            touch(KEY5)
+            self._safe_touch(KEY5)
         else:
-            touch(AUTO_PATHFIND)
+            self._safe_touch(AUTO_PATHFIND)
             time.sleep(0.3)
-            touch(KEY5)
+            self._safe_touch(KEY5)
         self.log("  自动寻路中(监测战斗)...")
 
         PATHFIND_WAIT = 8.0
@@ -463,7 +468,7 @@ class Dungeon100Task(BaseTask):
         time.sleep(0.8)
         self._tap_key5()
         time.sleep(0.8)
-        touch((150, 1790))  # *号键
+        self._safe_touch((150, 1790))  # *号键
         self.log("  *号提交，等待12s结算...")
         time.sleep(12.0)
 
@@ -474,14 +479,14 @@ class Dungeon100Task(BaseTask):
         time.sleep(0.8)
         self._tap_key5()
         time.sleep(0.8)
-        touch((150, 1790))  # *号键一键接取
+        self._safe_touch((150, 1790))  # *号键一键接取
         self.log("  *号接取完成")
         time.sleep(3.0)
 
     def _auto_battle_phase(self, count: int = 2):
         """键0开启自动遇怪，等N场战斗后键0取消，确认无残留战斗"""
         self.log(f"  按键0 开启自动遇怪...")
-        touch((950, 1590))  # KEY0
+        self._safe_touch((950, 1590))  # KEY0
         time.sleep(1.0)
 
         battles = 0
@@ -494,7 +499,7 @@ class Dungeon100Task(BaseTask):
             time.sleep(BATTLE_CHECK_INTERVAL)
 
         self.log(f"  按键0 取消自动遇怪 (共{battles}场)")
-        touch((950, 1590))
+        self._safe_touch((950, 1590))
         time.sleep(0.5)
 
         # 确认残留战斗
@@ -508,19 +513,19 @@ class Dungeon100Task(BaseTask):
 
     def _quest_teleport(self):
         """任务列表-&gt;确认-&gt;瞬间传送-&gt;提交任务"""
-        self.log("── 任务传送阶段 ──")
+        self.log_key("── 任务传送阶段 ──")
         self._tap(KEY1, "任务列表(1)", WAIT_PAGE)
         self._tap(STEP_CONFIRM, "确认", WAIT_PAGE)
         self._tap((500, 790), "瞬间传送", WAIT_TELEPORT)
-        self.log("  传送完成")
+        self.log_key("  传送完成")
         time.sleep(2.0)
         self._submit_quest()
-        self.log("  提交完成")
+        self.log_key("  提交完成")
 
     # ── 主流程 ─────────────────────────────────
 
     def run(self):
-        self.log("100副本启动")
+        self.log_key("100副本启动")
         self._battle_count = 0
 
         # Phase 0: 阳谷 -&gt; 副本入口
@@ -529,33 +534,36 @@ class Dungeon100Task(BaseTask):
         # Phase 1: 惊凡渊 -&gt; 裂影渊
         self._walk_phase()
         self._portal_phase()
-        self.log(f"裂影渊到达! 累计 {self._battle_count} 场战斗")
+        self.log_key(f"裂影渊到达! 累计 {self._battle_count} 场战斗")
 
-        # Phase 2: 裂影渊 -&gt; 补战斗(不足2场) -&gt; 找洞渊战魂 -&gt; 交任务-&gt;接任务
+        # Phase 2: 裂影渊 -&gt; 补战斗(不足2场) -&gt; 找洞渊战魂 -&gt; 交任务-&gt;接任务 -&gt; Boss战
         if self._battle_count < 2:
             remaining = 2 - self._battle_count
-            self.log(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
+            self.log_key(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
             self._auto_battle_phase(remaining)
         self._npc_phase(TARGET_NPC)
-        self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 5s
-        self._accept_quest()            # 5-&gt;5-&gt;*
-        self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 5s (第二轮)
-        self._accept_quest()            # 5-&gt;5-&gt;*
+        self._submit_quest()            # 5-&gt;5-&gt;* 交任务
+        self._accept_quest()            # 5-&gt;5-&gt;* 接任务 (触发洞渊战魂Boss战)
+        self.log_key("  等待洞渊战魂Boss战...")
+        self._wait_battle_end(is_boss=True)   # 打洞渊战魂Boss
+        self.log_key("  洞渊战魂击杀完成!")
+        self._submit_quest()            # 5-&gt;5-&gt;* 交任务
+        self._accept_quest()            # 5-&gt;5-&gt;* 接任务
         self._battle_count = 0          # 裂影渊boss完成，重置进入下一区域
 
         # Phase 3: 裂影渊 -&gt; 泣魔渊
         self._portal_phase()
-        self.log(f"泣魔渊到达!")
+        self.log_key(f"泣魔渊到达!")
 
         # Phase 4: 泣魔渊 -&gt; 陨仙渊
         self._walk_phase()
         self._portal_phase()
-        self.log(f"陨仙渊到达!")
+        self.log_key(f"陨仙渊到达!")
 
-        # Phase 5: 陨仙渊 -&gt; 补战斗(不足2场) -&gt; 找百鬼之王
+        # Phase 5: 陨仙渊 -&gt; 补战斗(不足2场) -&gt; 找百鬼之王 -&gt; 交任务-&gt;接任务
         if self._battle_count < 2:
             remaining = 2 - self._battle_count
-            self.log(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
+            self.log_key(f"战斗不足2场(当前{self._battle_count})，自动遇怪补{remaining}场")
             self._auto_battle_phase(remaining)
         self._npc_phase(TARGET_NPC2)
         self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 5s
@@ -568,9 +576,9 @@ class Dungeon100Task(BaseTask):
         self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 10s
         self._accept_quest()            # 5-&gt;5-&gt;* (触发Boss战)
         # Boss战
-        self.log("  等待Boss战...")
-        self._wait_battle_end()
-        self.log("  Boss战结束!")
+        self.log_key("  等待Boss战...")
+        self._wait_battle_end(is_boss=True)
+        self.log_key("  Boss战结束!")
         self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 10s
         self._accept_quest()            # 5-&gt;5-&gt;*
         self._submit_quest()            # 5-&gt;5-&gt;* -&gt; 10s (最后一轮)
@@ -579,4 +587,4 @@ class Dungeon100Task(BaseTask):
         # Phase 7: 键1任务列表 -&gt; 追踪寻路 -&gt; 传送出地图 -&gt; 阳谷
         self._quest_teleport()
 
-        self.log(f"100副本流程完成! 累计 {self._battle_count} 场战斗")
+        self.log_key(f"100副本流程完成! 累计 {self._battle_count} 场战斗")
