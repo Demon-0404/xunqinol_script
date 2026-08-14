@@ -42,6 +42,7 @@ class App:
         self._blood_monitors = {}  # name -> BloodMonitor
         self._blood_widgets = {}  # name -> (frame, status_label, btn)
         self._dungeon100_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 10)]
+        self._dungeon90_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 13)]
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -78,6 +79,7 @@ class App:
         self._build_walk_tab(notebook)
         self._build_quest_tab(notebook)
         self._build_dungeon_tab(notebook)
+        self._build_dungeon90_tab(notebook)
         self._build_dungeon100_tab(notebook)
         self._build_crystal_tab(notebook)
         self._build_pet_tab(notebook)
@@ -139,14 +141,19 @@ class App:
                 ttk.Label(row, textvariable=status_var,
                           foreground="blue" if running else "gray").pack(side=tk.LEFT, padx=8)
                 widgets_map[name] = {"start": start_btn, "stop": stop_btn, "status": status_var}
-                if tab_key == "dungeon100":
-                    last = self._dungeon100_last_phase(name)
+                phase_tab = {
+                    "dungeon100": (self._dungeon100_last_phase, self._dungeon100_start_options),
+                    "dungeon90": (self._dungeon90_last_phase, self._dungeon90_start_options),
+                }.get(tab_key)
+                if phase_tab:
+                    last_fn, options = phase_tab
+                    last = last_fn(name)
                     if last >= 0:
                         ttk.Label(row, text=f"上次: Phase {last}",
                                   foreground="darkorange").pack(side=tk.LEFT, padx=6)
                     start_var = tk.StringVar(value="自动续跑")
                     ttk.Combobox(row, textvariable=start_var,
-                                 values=self._dungeon100_start_options,
+                                 values=options,
                                  state="readonly", width=14).pack(side=tk.LEFT, padx=6)
                     widgets_map[name]["start_var"] = start_var
 
@@ -163,14 +170,19 @@ class App:
                 w["proc"].stdin.flush()
             except Exception:
                 pass
-            # 兜底：宽限期后仍未退出则强制杀进程
+            # 兜底：宽限期后仍未退出则强制杀进程，并强制刷新 UI 状态
+            # （防止 _read_worker 卡在 stdout 读不到 EOF，导致 _on_worker_exit 不触发、状态残留）
             def _force_kill(d=dev, proc=w["proc"]):
                 time.sleep(6)
-                if d in self._workers and proc.poll() is None:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                cur = self._workers.get(d)
+                # 只有当前记录的仍是这个 proc（用户没重新开始新任务）才清理
+                if cur and cur["proc"] is proc:
+                    if proc.poll() is None:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    self.root.after(0, self._on_worker_exit, d, tab_key)
             threading.Thread(target=_force_kill, daemon=True).start()
         widgets = self._tab_row_widgets.get(tab_key, {}).get(dev)
         if widgets:
@@ -445,6 +457,36 @@ class App:
         ttk.Label(tab, text=help_text, foreground="gray",
                   justify=tk.LEFT).pack(anchor=tk.W, pady=(8, 0))
 
+    # ── 90副本页 ─────────────────────────────────
+
+    def _build_dungeon90_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="90副本")
+
+        self._build_device_select(tab, "dungeon90", self._on_start_dungeon90)
+
+        ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
+                  foreground="gray").pack(anchor=tk.W, pady=(0, 4))
+
+        help_text = (
+            "Phase 0: 传送(备忘→副本→青丘境→瞬间传送)\n"
+            "Phase 1: 进入副本(NPC对话)\n"
+            "Phase 2: 青丘入口 遇怪2次→进灵隐绝境\n"
+            "Phase 3: 灵隐绝境 找瑞南羽→交→接(触发Boss)\n"
+            "Phase 4: 瑞南羽Boss战→交→接\n"
+            "Phase 5: 回青丘入口\n"
+            "Phase 6: 青丘入口 遇怪2次→进灵隐绝境\n"
+            "Phase 7: 灵隐绝境 找瑞南羽→交→接\n"
+            "Phase 8: 进禁忌古道→遇怪2次→回灵隐\n"
+            "Phase 9: 灵隐绝境 找瑞南羽→交→接\n"
+            "Phase 10: 进禁忌古道→进迷影禁地\n"
+            "Phase 11: 迷影禁地 找九尾异兽→交→接(触发Boss)\n"
+            "Phase 12: 九尾异兽Boss战→交→接→交\n"
+            "坐标基于1080x1920"
+        )
+        ttk.Label(tab, text=help_text, foreground="gray",
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
     # ── 100副本页 ─────────────────────────────────
 
     def _build_dungeon100_tab(self, notebook):
@@ -486,13 +528,39 @@ class App:
         info.pack(fill=tk.X, pady=(0, 6))
 
         help_text = (
-            "持续监控\"自动遇怪剩：XX场\"计数器。\n"
-            "当剩余次数归零后，等待战斗结束，自动点击数字键0\n"
-            "重新开启自动遇怪，实现无人值守循环刷怪。\n\n"
-            "使用条件: 已在副本中，已手动开启过第一次自动遇怪。"
+            "循环执行点击序列触发遇怪，模板匹配检测战斗结束。\n"
+            "点击序列: (100,200) → (1000,200) → (200,450) → (200,450)\n"
+            "战斗结束后立即重复，无限循环。\n\n"
+            "使用条件: 角色已在目标位置。"
         )
         ttk.Label(info, text=help_text, foreground="gray",
                   justify=tk.LEFT).pack(anchor=tk.W)
+
+        # 点击间隔设置（全局，所有设备适用）
+        gap_box = ttk.LabelFrame(tab, text="点击间隔(秒) — 全局，所有设备适用", padding=6)
+        gap_box.pack(fill=tk.X, pady=(0, 6))
+
+        self._crystal_gap1_var = tk.DoubleVar(value=0.1)
+        self._crystal_gap2_var = tk.DoubleVar(value=0.1)
+        self._crystal_gap3_var = tk.DoubleVar(value=0.4)
+
+        row = ttk.Frame(gap_box)
+        row.pack(anchor=tk.W)
+        ttk.Label(row, text="间隔1  (100,200)→(1000,200):").pack(side=tk.LEFT)
+        ttk.Spinbox(row, from_=0.1, to=5, increment=0.1,
+                    textvariable=self._crystal_gap1_var, width=5).pack(side=tk.LEFT, padx=4)
+
+        row2 = ttk.Frame(gap_box)
+        row2.pack(anchor=tk.W, pady=(2, 0))
+        ttk.Label(row2, text="间隔2  (1000,200)→(200,450):").pack(side=tk.LEFT)
+        ttk.Spinbox(row2, from_=0.1, to=5, increment=0.1,
+                    textvariable=self._crystal_gap2_var, width=5).pack(side=tk.LEFT, padx=4)
+
+        row3 = ttk.Frame(gap_box)
+        row3.pack(anchor=tk.W, pady=(2, 0))
+        ttk.Label(row3, text="间隔3  (200,450)→(200,450):").pack(side=tk.LEFT)
+        ttk.Spinbox(row3, from_=0.1, to=5, increment=0.1,
+                    textvariable=self._crystal_gap3_var, width=5).pack(side=tk.LEFT, padx=4)
 
     # ── 抓宠页 ─────────────────────────────────────
 
@@ -802,6 +870,38 @@ class App:
             "dungeon_id": self._dung_id_var.get(), "rounds": self._dung_rounds_var.get()}}
         self._start_worker("dungeon", dev, spec)
 
+    # ── 90副本 ─────────────────────────────────────
+
+    def _on_start_dungeon90(self, dev):
+        if dev in self._workers:
+            self._log(f"[{dev}] 已有任务在运行，跳过")
+            return
+        spec = {"task_type": "dungeon90",
+                "params": {"start_phase": self._dungeon90_start_phase(dev)}}
+        self._start_worker("dungeon90", dev, spec)
+
+    def _dungeon90_start_phase(self, dev):
+        w = self._tab_row_widgets.get("dungeon90", {}).get(dev, {})
+        val = w.get("start_var", tk.StringVar(value="自动续跑")).get()
+        if val == "从头开始 (Phase 0)":
+            return 0
+        if val.startswith("Phase "):
+            try:
+                return int(val.split()[-1])
+            except Exception:
+                return None
+        return None  # 自动续跑
+
+    def _dungeon90_last_phase(self, dev):
+        serial = self._device_serial.get(dev, "")
+        safe = serial.replace(":", "_").replace("/", "_") if serial else "default"
+        path = os.path.join(BASE_DIR, "logs", f"dungeon90_state_{safe}.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return int(json.load(f).get("last_done_phase", -1))
+        except Exception:
+            return -1
+
     # ── 100副本 ─────────────────────────────────────
 
     def _on_start_dungeon100(self, dev):
@@ -890,7 +990,8 @@ class App:
         if dev in self._workers:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
-        self._start_worker("crystal", dev, {"task_type": "crystal"})
+        gaps = [self._crystal_gap1_var.get(), self._crystal_gap2_var.get(), self._crystal_gap3_var.get()]
+        self._start_worker("crystal", dev, {"task_type": "crystal", "params": {"gaps": gaps}})
 
     # ── 截图 ─────────────────────────────────────
 

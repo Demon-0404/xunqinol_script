@@ -41,9 +41,12 @@ def build_task(spec: dict):
     if t == "dungeon100":
         from tasks.dungeon100_task import Dungeon100Task
         return Dungeon100Task(serial=serial, start_phase=p.get("start_phase"))
+    if t == "dungeon90":
+        from tasks.dungeon90_task import Dungeon90Task
+        return Dungeon90Task(serial=serial, start_phase=p.get("start_phase"))
     if t == "crystal":
         from tasks.crystal_task import CrystalTask
-        return CrystalTask(serial=serial)
+        return CrystalTask(serial=serial, gaps=p.get("gaps"))
     if t == "tower":
         from tasks.tower_task import TowerTask
         return TowerTask(serial=serial)
@@ -84,11 +87,16 @@ def main():
     task.start()
 
     def monitor():
-        for line in sys.stdin:
-            cmd = line.strip().upper()
-            if cmd == "STOP":
-                task.stop()
-                break
+        try:
+            for line in sys.stdin:
+                cmd = line.strip().upper()
+                if cmd == "STOP":
+                    break
+        except Exception:
+            pass
+        finally:
+            # 收到 STOP 或 stdin EOF（UI 进程退出）都停止任务，避免孤儿进程残留
+            task.stop()
 
     threading.Thread(target=monitor, daemon=True).start()
 
