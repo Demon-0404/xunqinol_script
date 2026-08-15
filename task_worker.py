@@ -26,24 +26,27 @@ def build_task(spec: dict):
     serial = spec.get("serial", "")
     p = spec.get("params", {})
 
-    if t == "walk":
-        from tasks.walk_demo import WalkDemo
-        return WalkDemo(**p)
-    if t == "quest":
-        from tasks.flow_task import FlowTask
-        return FlowTask("跑环", p["steps"], loop=p["loop"])
     if t == "pet":
         from tasks.flow_task import FlowTask
         return FlowTask("抓宠物", p["steps"], loop=p["loop"])
-    if t == "dungeon":
-        from tasks.dungeon_task import DungeonTask
-        return DungeonTask(dungeon_id=p["dungeon_id"], rounds=p["rounds"], serial=serial)
     if t == "dungeon100":
         from tasks.dungeon100_task import Dungeon100Task
         return Dungeon100Task(serial=serial, start_phase=p.get("start_phase"))
     if t == "dungeon90":
         from tasks.dungeon90_task import Dungeon90Task
         return Dungeon90Task(serial=serial, start_phase=p.get("start_phase"))
+    if t == "tie1":
+        from tasks.dungeon_tie1_task import DungeonTie1Task
+        return DungeonTie1Task(serial=serial, start_phase=p.get("start_phase"))
+    if t == "tie2":
+        from tasks.dungeon_tie2_task import DungeonTie2Task
+        return DungeonTie2Task(serial=serial, start_phase=p.get("start_phase"))
+    if t == "tie3":
+        from tasks.dungeon_tie3_task import DungeonTie3Task
+        return DungeonTie3Task(serial=serial, start_phase=p.get("start_phase"))
+    if t == "tie4":
+        from tasks.dungeon_tie4_task import DungeonTie4Task
+        return DungeonTie4Task(serial=serial, start_phase=p.get("start_phase"))
     if t == "crystal":
         from tasks.crystal_task import CrystalTask
         return CrystalTask(serial=serial, gaps=p.get("gaps"))

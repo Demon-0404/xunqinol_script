@@ -60,9 +60,13 @@ class BaseTask(ABC):
             pass
 
     def log(self, msg: str):
-        """详细日志 —— 只写后台文件，不上屏（避免刷屏卡 UI）"""
+        """详细日志 —— 写后台文件 + 上屏(stdout 供 UI 显示)"""
         line = self._format_log(msg)
         self._write_log_file(line)
+        try:
+            print(line, flush=True)
+        except Exception:
+            pass
         if self._on_log:
             self._on_log(line)
 

@@ -34,3 +34,10 @@ Thumbs.db
 # Conda
 conda/
 .claude/
+
+# Large binaries / system debug artifacts
+frida-server
+tools/frida-server-*
+*.apk
+_pagefile*
+_set_pagefile.ps1

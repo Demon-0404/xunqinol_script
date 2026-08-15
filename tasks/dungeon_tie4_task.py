@@ -1,6 +1,6 @@
-"""90副本(青丘境)任务 —— 步骤0传送 + 青丘入口/灵隐绝境/禁忌古道/迷影禁地 多地图流转
+"""铁4副本(魔界之门)任务 —— 步骤0传送 + 焚骨熔岩/隐之境/鬼爪炼狱/炼魂祭坛 多地图流转
 
-断点续跑: 每个 Phase 完成后写状态文件 logs/dungeon90_state_{serial}.json
+断点续跑: 每个 Phase 完成后写状态文件 logs/dungeon_tie4_state_{serial}.json
 手动/自动: start_phase=None 自动续跑; =0 从头开始; =N 手动从 Phase N 开始
 """
 import time
@@ -10,27 +10,27 @@ import subprocess
 import numpy as np
 import cv2
 from PIL import Image
-from tasks.base_task import BaseTask
+from tasks.base_task import BaseTask, STAR_KEY
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 
 # ── 坐标配置 (1080x1920) ──────────────────────
-# 步骤0: 备忘→副本→翻页→OCR找青丘境→瞬间传送
+# 步骤0: 备忘→副本→OCR找魔界→瞬间传送
 MEMO = (1000, 1200)              # 备忘
 DUNGEON_TAB = (750, 200)         # 副本标签
-KEY3 = (730, 1590)               # 数字键3 翻页
 KEY0 = (950, 1590)               # 数字键0 自动遇怪
 KEY5 = (150, 1590)               # 数字键5 确认/对话
 KEY_STAR = (150, 1790)           # *号键 一键领/交
 ENTER_CONFIRM = (100, 1200)      # 确认进入/缴费进入
 
 # 走路传送门 (检测地图名变化即停)
-LEFT_DOWN = (20, 1100)           # 左下角
-LEFT_UP = (20, 400)              # 左上角
+POS_MID = (550, 200)             # 上方中间(焚骨熔岩→隐之境)
+LEFT_UP = (30, 400)              # 左上角(隐之境→鬼爪炼狱)
+LEFT_DOWN = (30, 1100)           # 左下角
+RIGHT_UP = (1050, 400)           # 右上角(鬼爪炼狱→隐之境)
 RIGHT_DOWN = (1050, 1100)        # 右下角
-RIGHT_UP = (1050, 400)           # 右上角
-PORTAL_50 = (50, 600)            # 禁忌古道传送门
+RIGHT_MID = (1050, 650)          # 右侧中间(隐之境→炼魂祭坛)
 
 # NPC列表 (复用100副本坐标)
 NEARBY_BTN = (350, 1780)         # 周围列表按钮
@@ -61,14 +61,19 @@ WAIT_CLICK = 0.3                 # 点击后等待
 WAIT_STEP = 3.0                  # 走路每步间隔
 BATTLE_CHECK_INTERVAL = 0.5      # 战斗检测频率
 
+# 阶段总数
+TOTAL_PHASES = 14
+MAX_BATTLES = 1                  # 交任务前需累计的战斗场数
 
-class Dungeon90Task(BaseTask):
-    """90副本自动任务 — 青丘境 12 Phase 完整流程"""
+
+class DungeonTie4Task(BaseTask):
+    """铁4副本(魔界之门)自动任务 — 9 Phase 完整流程"""
 
     def __init__(self, serial: str = "", start_phase: int = None):
-        super().__init__("90副本")
+        super().__init__("铁4副本")
         self._serial = serial
         self._reader = None
+        self._battle_count = 0
         self._start_phase = start_phase
 
     # ── OCR ────────────────────────────────────
@@ -86,7 +91,7 @@ class Dungeon90Task(BaseTask):
         import shutil
         if not shutil.which(adb):
             adb = r"D:\Setup_and_Downloads\Setup\MuMuPlayer\nx_main\adb.exe"
-        tmp = os.path.join(LOG_DIR, f"_dungeon90_tmp_{os.getpid()}.png")
+        tmp = os.path.join(LOG_DIR, f"_dungeon_tie4_tmp_{os.getpid()}.png")
         adb_args = [adb]
         if self._serial:
             adb_args += ["-s", self._serial]
@@ -136,9 +141,10 @@ class Dungeon90Task(BaseTask):
         return False
 
     def _wait_battle_end(self, is_boss: bool = False):
+        self.log_key(f"  检测到战斗! 等待结束... (第{self._battle_count + 1}场)")
         miss = 0
         t0 = time.time()
-        while miss < 3 and time.time() - t0 < 60 and self._running:
+        while miss < 3 and time.time() - t0 < (300 if is_boss else 60) and self._running:
             time.sleep(0.5)
             if self._is_in_battle():
                 miss = 0
@@ -146,7 +152,24 @@ class Dungeon90Task(BaseTask):
                 miss += 1
         if not self._running:
             return
-        time.sleep(12.0 if is_boss else 1.0)
+        if is_boss:
+            self.log_key("  Boss战结束!")
+            self._sleep(12.0)
+            self.log_key("  等待'战斗胜利'结算页消失...")
+            self._wait_victory_gone()
+            return
+        self._battle_count += 1
+        self.log_key(f"  战斗结束! 累计 {self._battle_count}/{MAX_BATTLES} 场")
+        time.sleep(1.0)
+
+    def _wait_victory_gone(self, timeout=20.0):
+        """等待'战斗胜利'结算页消失，避免取消点击落在结算页上"""
+        t0 = time.time()
+        while time.time() - t0 < timeout and self._running:
+            if not self._check_text_at("战斗胜利", (500, 500), 200):
+                return True
+            time.sleep(0.5)
+        return False
 
     # ── 点击辅助 ────────────────────────────────
 
@@ -160,6 +183,12 @@ class Dungeon90Task(BaseTask):
     def _tap_key5(self):
         self._safe_touch(KEY5)
         time.sleep(0.3)
+
+    def _sleep(self, seconds: float):
+        """可中断等待：停止时立即退出"""
+        t0 = time.time()
+        while time.time() - t0 < seconds and self._running:
+            time.sleep(0.5)
 
     # ── 地图名 ──────────────────────────────────
 
@@ -176,9 +205,9 @@ class Dungeon90Task(BaseTask):
             return ""
         return "".join(r[1] for r in results if r[2] >= 0.2)
 
-    # ── OCR 全图找文字 (步骤0用) ─────────────────
+    # ── OCR 全图找文字 (步骤0用) ────────────────
 
-    def _find_text_in_area(self, keyword, y_start, y_end, x_start=0, x_end=540):
+    def _find_text_in_area(self, keyword, y_start, y_end, x_start=0, x_end=1080):
         arr = self._screenshot_arr()
         if arr is None:
             return None
@@ -197,30 +226,31 @@ class Dungeon90Task(BaseTask):
                 return (cx, cy)
         return None
 
-    # ── Phase 0: 步骤0传送 + 第一大步进入副本 ──────
+    # ── Phase 0: 步骤0传送 ──────────────────────
 
     def _step0_memo_enter(self):
-        self.log_key("── 步骤0: 备忘→副本→翻页→OCR找青丘境→瞬间传送 ──")
+        self.log_key("── 步骤0: 备忘→副本→OCR找魔界→瞬间传送 ──")
         self._tap(MEMO, "备忘", 1.2)
         self._tap(DUNGEON_TAB, "副本标签", 1.2)
-        self._tap(KEY3, "数字键3翻页", 1.5)
-        pos = self._find_text_in_area("青丘境", 380, 1250)
+        pos = self._find_text_in_area("魔界", 300, 1300)
         if pos is None:
-            pos = self._find_text_in_area("青丘", 380, 1250)
+            pos = self._find_text_in_area("魔", 300, 1300)
         if pos is None:
-            self.log_key("  [失败] 未找到青丘境行")
+            self.log_key("  [失败] 未找到魔界行")
             return False
-        self.log_key(f"  找到青丘境 @ {pos}")
+        self.log_key(f"  找到魔界 @ {pos}")
         self._safe_touch((250, pos[1])); time.sleep(1.0)
         self._safe_touch((250, pos[1])); time.sleep(1.0)
-        tp = self._find_text_in_area("瞬间传送", 400, 1200, 0, 1080)
+        tp = self._find_text_in_area("瞬间传送", 400, 1200)
         if tp is None:
             self.log_key("  [失败] 未找到瞬间传送")
             return False
         self.log_key(f"  找到瞬间传送 @ {tp}")
-        self._safe_touch(tp); time.sleep(3.0)
+        self._safe_touch(tp); self._sleep(3.0)
         self.log_key("  步骤0完成，已传送到副本入口")
         return True
+
+    # ── Phase 1: 进入副本 ───────────────────────
 
     def _enter_dungeon(self):
         self.log_key("── 第一大步: NPC对话进入副本 ──")
@@ -229,10 +259,10 @@ class Dungeon90Task(BaseTask):
         self._safe_touch(KEY_STAR); time.sleep(1.0)
         self._safe_touch(KEY5); time.sleep(1.0)
         self._safe_touch(ENTER_CONFIRM); time.sleep(0.8)
-        self._safe_touch(ENTER_CONFIRM); time.sleep(3.0)
+        self._safe_touch(ENTER_CONFIRM); self._sleep(3.0)
         self.log_key(f"  进入后地图: '{self._get_map_name()}'")
 
-    # ── 走路阶段 (检测地图名变化即停) ─────────────
+    # ── 走路阶段 (检测关键字即停) ────────────────
 
     def _walk_phase(self, desc, pos, target_check, times=3):
         self.log_key(f"── {desc} 点 {times} 次 ──")
@@ -253,7 +283,7 @@ class Dungeon90Task(BaseTask):
 
     # ── 自动遇怪 ────────────────────────────────
 
-    def _auto_battle_phase(self, count=2):
+    def _auto_battle_phase(self, count=1):
         self.log_key(f"  按键0 开启自动遇怪 (目标{count}场)...")
         self._safe_touch(KEY0); time.sleep(1.0)
         battles = 0
@@ -265,8 +295,24 @@ class Dungeon90Task(BaseTask):
                 self._wait_battle_end()
                 self.log_key(f"  [战斗] 第{battles}场结束")
             time.sleep(0.3)
+        # 确保战斗已结束再点取消（按键0落在战斗界面会无效）
+        if self._is_in_battle() and self._running:
+            self.log_key("  战斗未结束，等待本场结束再取消...")
+            self._wait_battle_end()
+        self.log_key("  等待'战斗胜利'结算页消失...")
+        self._wait_victory_gone()
         self.log_key(f"  按键0 取消自动遇怪 (共{battles}场)")
         self._safe_touch(KEY0); time.sleep(0.5)
+        time.sleep(1.0)
+        # 取消后确认无残留战斗
+        for _ in range(10):
+            if self._is_in_battle() and self._running:
+                self.log_key("  残留战斗! 等待结束...")
+                self._wait_battle_end()
+                break
+            time.sleep(0.5)
+
+    # ── Boss 战 ────────────────────────────────
 
     def _boss_battle(self):
         self.log_key("  等待 Boss 战触发...")
@@ -313,6 +359,18 @@ class Dungeon90Task(BaseTask):
                 return True
         return False
 
+    def _verify_npc_panel(self) -> bool:
+        """检查NPC列表面板是否已正确打开"""
+        if self._check_text_at("周围列表", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
+            self.log("  [面板] '周围列表'已打开")
+            return True
+        if self._check_text_at("聊天记录", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
+            self.log("  [面板] 误开'聊天记录'，尝试关闭...")
+            self._dismiss_panels()
+            return False
+        self.log("  [面板] 未检测到面板标题")
+        return False
+
     def _open_npc_list(self):
         for retry in range(3):
             self.log(f"  打开周围列表... (尝试{retry + 1}/3)")
@@ -327,7 +385,9 @@ class Dungeon90Task(BaseTask):
                 continue
             self._safe_touch(NPC_TAB)
             time.sleep(1.2)
-            return True
+            if self._verify_npc_panel():
+                return True
+            self.log(f"  NPC面板未正确打开，重试...")
         self.log("  NPC面板多次重试失败")
         return False
 
@@ -340,7 +400,7 @@ class Dungeon90Task(BaseTask):
         results_list = []
         ts = time.strftime("%H%M%S")
         try:
-            Image.fromarray(arr).save(os.path.join(LOG_DIR, f"_dungeon90_npc_{ts}.png"))
+            Image.fromarray(arr).save(os.path.join(LOG_DIR, f"_dungeon_tie4_npc_{ts}.png"))
         except Exception:
             pass
         for i in range(ROW_COUNT):
@@ -379,7 +439,7 @@ class Dungeon90Task(BaseTask):
                     self.log(f"  找到: '{name}' @ Y={y}")
                     return (name, y)
                 common = sum(1 for ch in name if ch in target)
-                if common >= 2:
+                if common >= 1:
                     self.log(f"  模糊匹配: '{name}' ~ '{target}' @ Y={y}")
                     return (name, y)
             if page < 4:
@@ -391,6 +451,9 @@ class Dungeon90Task(BaseTask):
         return None
 
     def _npc_phase(self, target_npc) -> bool:
+        if self._is_in_battle():
+            self.log_key(f"  找NPC前遇怪! 等待战斗结束...")
+            self._wait_battle_end()
         result = self._find_npc(target_npc)
         if result is None:
             self.log_key(f"  [失败] 未找到{target_npc}，跳过")
@@ -402,9 +465,11 @@ class Dungeon90Task(BaseTask):
         if y == ROW_Y_START:
             self._safe_touch(KEY5)
         else:
+            # 非第一行：再点一次该行，才弹出自动寻路菜单
+            self._safe_touch((ROW_X, y))
+            time.sleep(0.5)
             self._safe_touch(AUTO_PATHFIND)
             time.sleep(0.3)
-            self._safe_touch(KEY5)
         self.log("  自动寻路中(监测战斗)...")
         PATHFIND_WAIT = 8.0
         MAX_PATHFIND_ROUNDS = 4
@@ -427,6 +492,9 @@ class Dungeon90Task(BaseTask):
         return True
 
     def _submit_quest(self):
+        if self._is_in_battle():
+            self.log_key("  提交前遇怪! 等待战斗结束...")
+            self._wait_battle_end()
         self.log_key("  提交任务: 5→5→*...")
         self._tap_key5()
         time.sleep(0.8)
@@ -434,9 +502,12 @@ class Dungeon90Task(BaseTask):
         time.sleep(0.8)
         self._safe_touch(KEY_STAR)
         self.log_key("  *号提交，等待12s结算...")
-        time.sleep(12.0)
+        self._sleep(12.0)
 
     def _accept_quest(self):
+        if self._is_in_battle():
+            self.log_key("  接取前遇怪! 等待战斗结束...")
+            self._wait_battle_end()
         self.log_key("  接取任务: 5→5→*...")
         self._tap_key5()
         time.sleep(0.8)
@@ -444,14 +515,14 @@ class Dungeon90Task(BaseTask):
         time.sleep(0.8)
         self._safe_touch(KEY_STAR)
         self.log_key("  *号接取完成")
-        time.sleep(3.0)
+        self._sleep(3.0)
 
     # ── 断点续跑 (状态文件) ──────────────────────
 
     @property
     def _state_file(self) -> str:
         safe = self._serial.replace(":", "_").replace("/", "_") if self._serial else "default"
-        return os.path.join(LOG_DIR, f"dungeon90_state_{safe}.json")
+        return os.path.join(LOG_DIR, f"dungeon_tie4_state_{safe}.json")
 
     def _load_progress(self) -> int:
         try:
@@ -465,7 +536,7 @@ class Dungeon90Task(BaseTask):
             os.makedirs(LOG_DIR, exist_ok=True)
             with open(self._state_file, "w", encoding="utf-8") as f:
                 json.dump({"last_done_phase": phase}, f)
-            self.log_key(f"[进度] Phase {phase}/11 完成")
+            self.log_key(f"[进度] Phase {phase}/{TOTAL_PHASES} 完成")
         except Exception as e:
             self.log(f"  [进度] 保存失败: {e}")
 
@@ -478,12 +549,13 @@ class Dungeon90Task(BaseTask):
             pass
 
     def _log_phase(self, n: int, desc: str):
-        self.log_key(f"══ Phase {n}/12: {desc} ══")
+        self.log_key(f"══ Phase {n}/{TOTAL_PHASES}: {desc} ══")
 
     # ── 主流程 ─────────────────────────────────
 
     def run(self):
-        self.log_key("90副本启动")
+        self.log_key("铁4副本启动")
+        self._battle_count = 0
 
         if self._start_phase is None:
             done = self._load_progress()
@@ -500,106 +572,111 @@ class Dungeon90Task(BaseTask):
             start_phase = self._start_phase
             self.log_key(f"[进度] 手动从 Phase {start_phase} 开始")
 
-        # Phase 0: 步骤0 传送 (备忘→副本→翻页→青丘境→瞬间传送)
+        # Phase 0: 步骤0 传送 (备忘→副本→魔界→瞬间传送)
         if start_phase <= 0:
-            self._log_phase(0, "传送(备忘→副本→青丘境→瞬间传送)")
+            self._log_phase(0, "传送(备忘→副本→魔界→瞬间传送)")
             self._step0_memo_enter()
             self._save_progress(0)
 
-        # Phase 1: 第一大步 进入副本 (NPC对话)
+        # Phase 1: 进入副本 (NPC对话)
         if start_phase <= 1:
             self._log_phase(1, "进入副本(NPC对话)")
             self._enter_dungeon()
             self._save_progress(1)
 
-        # Phase 2: 青丘入口 遇怪2次 → 进灵隐绝境
+        # Phase 2: 焚骨熔岩 找心魔→交→接
         if start_phase <= 2:
-            self._log_phase(2, "青丘入口 遇怪2次→进灵隐绝境")
-            self._auto_battle_phase(2)
-            if not self._walk_phase("左下角", LEFT_DOWN, lambda n: "灵隐" in n):
-                self._walk_phase("左上角", LEFT_UP, lambda n: "灵隐" in n)
-            self._save_progress(2)
-
-        # Phase 3: 灵隐绝境 找瑞南羽 → 交 → 接 (触发Boss)
-        if start_phase <= 3:
-            self._log_phase(3, "灵隐绝境 找瑞南羽→交→接")
-            if self._npc_phase("瑞南羽"):
+            self._log_phase(2, "焚骨熔岩 找心魔→交→接")
+            if self._npc_phase("心魔"):
                 self._submit_quest()
                 self._accept_quest()
+            self._save_progress(2)
+
+        # Phase 3: 焚骨熔岩 自动遇怪1次
+        if start_phase <= 3:
+            self._log_phase(3, "焚骨熔岩 自动遇怪1次")
+            self._auto_battle_phase(1)
             self._save_progress(3)
 
-        # Phase 4: 瑞南羽Boss战 → 交 → 接
+        # Phase 4: 焚骨熔岩 再找心魔→交→接
         if start_phase <= 4:
-            self._log_phase(4, "瑞南羽Boss战→交→接")
-            self._boss_battle()
-            self._submit_quest()
-            self._accept_quest()
+            self._log_phase(4, "焚骨熔岩 再找心魔→交→接")
+            if self._npc_phase("心魔"):
+                self._submit_quest()
+                self._accept_quest()
             self._save_progress(4)
 
-        # Phase 5: 回青丘入口
+        # Phase 5: 点(550,200)→隐之境
         if start_phase <= 5:
-            self._log_phase(5, "回青丘入口")
-            if not self._walk_phase("右下角", RIGHT_DOWN, lambda n: "青丘" in n):
-                self._walk_phase("右上角", RIGHT_UP, lambda n: "青丘" in n)
+            self._log_phase(5, "上方(550,200)→隐之境")
+            self._walk_phase("上方(550,200)", POS_MID, lambda n: "隐" in n, 3)
             self._save_progress(5)
 
-        # Phase 6: 青丘入口 遇怪2次 → 进灵隐绝境
+        # Phase 6: 左下角→左上角→鬼爪炼狱
         if start_phase <= 6:
-            self._log_phase(6, "青丘入口 遇怪2次→进灵隐绝境")
-            self._auto_battle_phase(2)
-            if not self._walk_phase("左下角", LEFT_DOWN, lambda n: "灵隐" in n):
-                self._walk_phase("左上角", LEFT_UP, lambda n: "灵隐" in n)
+            self._log_phase(6, "左下角→左上角→鬼爪炼狱")
+            if not self._walk_phase("左下角", LEFT_DOWN, lambda n: "鬼爪" in n, 3):
+                self._walk_phase("左上角", LEFT_UP, lambda n: "鬼爪" in n, 3)
             self._save_progress(6)
 
-        # Phase 7: 灵隐绝境 找瑞南羽 → 交 → 接
+        # Phase 7: 鬼爪炼狱 找蜃兽→交→接
         if start_phase <= 7:
-            self._log_phase(7, "灵隐绝境 找瑞南羽→交→接")
-            if self._npc_phase("瑞南羽"):
+            self._log_phase(7, "鬼爪炼狱 找蜃兽→交→接")
+            if self._npc_phase("蜃兽"):
                 self._submit_quest()
                 self._accept_quest()
             self._save_progress(7)
 
-        # Phase 8: 进禁忌古道 → 遇怪2次 → 回灵隐
+        # Phase 8: 鬼爪炼狱 Boss战
         if start_phase <= 8:
-            self._log_phase(8, "进禁忌古道→遇怪2次→回灵隐")
-            self._safe_touch(PORTAL_50); time.sleep(3.0)
-            self._auto_battle_phase(2)
-            if not self._walk_phase("右下角", RIGHT_DOWN, lambda n: "灵隐" in n):
-                self._walk_phase("右上角", RIGHT_UP, lambda n: "灵隐" in n)
+            self._log_phase(8, "鬼爪炼狱 Boss战")
+            self._boss_battle()
             self._save_progress(8)
 
-        # Phase 9: 灵隐绝境 找瑞南羽 → 交 → 接
+        # Phase 9: 蜃兽战后 交→接
         if start_phase <= 9:
-            self._log_phase(9, "灵隐绝境 找瑞南羽→交→接")
-            if self._npc_phase("瑞南羽"):
-                self._submit_quest()
-                self._accept_quest()
-            self._save_progress(9)
-
-        # Phase 10: 进禁忌古道 → 进迷影禁地
-        if start_phase <= 10:
-            self._log_phase(10, "进禁忌古道→进迷影禁地")
-            self._safe_touch(PORTAL_50); time.sleep(3.0)
-            if not self._walk_phase("右下角", RIGHT_DOWN, lambda n: "迷影" in n):
-                self._walk_phase("左下角", LEFT_DOWN, lambda n: "迷影" in n)
-            self._save_progress(10)
-
-        # Phase 11: 迷影禁地 找九尾异兽 → 交 → 接 (触发Boss)
-        if start_phase <= 11:
-            self._log_phase(11, "迷影禁地 找九尾异兽→交→接")
-            if self._npc_phase("九尾异兽"):
-                self._submit_quest()
-                self._accept_quest()
-            self._save_progress(11)
-
-        # Phase 12: 九尾异兽Boss战 → 交 → 接 → 交
-        if start_phase <= 12:
-            self._log_phase(12, "九尾异兽Boss战→交→接→交")
-            self._boss_battle()
+            self._log_phase(9, "蜃兽战后 交→接")
             self._submit_quest()
             self._accept_quest()
-            self._submit_quest()
+            self._save_progress(9)
+
+        # Phase 10: 回隐之境 (右下角→右上角)
+        if start_phase <= 10:
+            self._log_phase(10, "回隐之境(右下角→右上角)")
+            self._battle_count = 0
+            if not self._walk_phase("右下角", RIGHT_DOWN, lambda n: "隐" in n, 3):
+                self._walk_phase("右上角", RIGHT_UP, lambda n: "隐" in n, 3)
+            self._save_progress(10)
+
+        # Phase 11: 进炼魂祭坛 (右侧中间)
+        if start_phase <= 11:
+            self._log_phase(11, "进炼魂祭坛(右侧中间)")
+            self._walk_phase("右侧中间", RIGHT_MID, lambda n: "炼魂" in n, 3)
+            self._save_progress(11)
+
+        # Phase 12: 炼魂祭坛 补1场战斗
+        if start_phase <= 12:
+            self._log_phase(12, "炼魂祭坛 补1场战斗")
+            if self._battle_count < 1:
+                remaining = 1 - self._battle_count
+                self.log_key(f"战斗不足1场(当前{self._battle_count})，自动遇怪补{remaining}场")
+                self._auto_battle_phase(remaining)
             self._save_progress(12)
 
+        # Phase 13: 炼魂祭坛 找天星子→交
+        if start_phase <= 13:
+            self._log_phase(13, "炼魂祭坛 找天星子→交")
+            if self._npc_phase("天星子"):
+                self._submit_quest()
+            self._save_progress(13)
+
+        # Phase 14: 接新任务→Boss战→交任务
+        if start_phase <= 14:
+            self._log_phase(14, "接新任务→Boss战→交任务")
+            self._accept_quest()
+            self._boss_battle()
+            self._submit_quest()
+            self._save_progress(14)
+
         self._clear_progress()
-        self.log_key("90副本流程完成!")
+        self.log_key("铁4副本流程完成!")

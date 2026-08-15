@@ -197,13 +197,28 @@ class Dungeon100Task(BaseTask):
 
         if is_boss:
             # Boss战结束不点结算弹窗，避免打乱后续流程，只延时
-            time.sleep(8.0)
+            time.sleep(12.0)
             return
 
         # 结算弹窗
         time.sleep(1.0)
         for _ in range(5):
             if self._has_settlement():
+                self._tap_key5()
+                time.sleep(0.5)
+            else:
+                break
+
+    def _ensure_not_in_battle(self, tag=""):
+        """关键点击前确保非战斗：先等战斗结束，再清残留结算弹窗"""
+        if self._is_in_battle():
+            self.log(f"  [{tag}] 检测到战斗，先等待结束...")
+            self._wait_battle_end()
+        # 兜底清理残留结算弹窗（战斗UI已消失但结算页还在）
+        time.sleep(0.5)
+        for _ in range(3):
+            if self._has_settlement():
+                self.log(f"  [{tag}] 残留结算弹窗，按5关闭...")
                 self._tap_key5()
                 time.sleep(0.5)
             else:
@@ -308,8 +323,9 @@ class Dungeon100Task(BaseTask):
     def _dismiss_panels(self) -> bool:
         """检测并关闭误打开的面板，返回是否关闭了面板"""
         for cx, cy in CANCEL_PANELS:
-            if self._check_text_at("取消", (cx, cy), 100):
-                self.log(f"  检测到误开面板 @({cx},{cy})，点击取消关闭")
+            if self._check_text_at("取消", (cx, cy), 100) or \
+               self._check_text_at("关闭", (cx, cy), 100):
+                self.log(f"  检测到误开面板 @({cx},{cy})，点击关闭")
                 self._safe_touch((cx, cy))
                 time.sleep(0.5)
                 return True
@@ -322,14 +338,19 @@ class Dungeon100Task(BaseTask):
             return True
         if self._check_text_at("聊天记录", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
             self.log("  [面板] 误开'聊天记录'，尝试关闭...")
-            self._dismiss_panels()
+            if not self._dismiss_panels():
+                # 兜底：直接点聊天记录面板关闭位置
+                self.log("  [面板] 未识别到取消键，直接点关闭位置兜底")
+                self._safe_touch((950, 1450))
+                time.sleep(0.5)
             return False
         self.log("  [面板] 未检测到面板标题")
         return False
 
     def _open_npc_list(self):
-        """打开周围列表-&gt;NPC标签"""
+        """打开周围列表-&gt;NPC标签（非战斗状态下才点击）"""
         for retry in range(3):
+            self._ensure_not_in_battle("打开列表")
             self.log(f"  打开周围列表... (尝试{retry + 1}/3)")
             self._safe_touch(NEARBY_BTN)
             time.sleep(1.5)
@@ -431,6 +452,7 @@ class Dungeon100Task(BaseTask):
             return
         name, y = result
         self.log(f"  点击NPC: '{name}' @ Y={y}")
+        self._ensure_not_in_battle("点击NPC")
         self._safe_touch((ROW_X, y))
         time.sleep(0.5)
         if y == ROW_Y_START:
@@ -463,8 +485,10 @@ class Dungeon100Task(BaseTask):
             self._wait_battle_end()
         self.log(f"  到达{target_npc}")
 
-    def _submit_quest(self):
+    def _submit_quest(self, check_battle: bool = True):
         """提交任务: 5-&gt;5-&gt;* -&gt; 等12s结算"""
+        if check_battle:
+            self._ensure_not_in_battle("提交任务")
         self.log("  提交任务: 5-&gt;5-&gt;*...")
         self._tap_key5()
         time.sleep(0.8)
@@ -476,6 +500,7 @@ class Dungeon100Task(BaseTask):
 
     def _accept_quest(self):
         """接取新任务: 5-&gt;5-&gt;*"""
+        self._ensure_not_in_battle("接取任务")
         self.log("  接取任务: 5-&gt;5-&gt;*...")
         self._tap_key5()
         time.sleep(0.8)
@@ -486,7 +511,7 @@ class Dungeon100Task(BaseTask):
         time.sleep(3.0)
 
     def _auto_battle_phase(self, count: int = 2):
-        """键0开启自动遇怪，等N场战斗后键0取消，确认无残留战斗"""
+        """键0开启自动遇怪，等N场战斗后键0取消（0键是toggle，取消只按1次）"""
         self.log(f"  按键0 开启自动遇怪...")
         self._safe_touch((950, 1590))  # KEY0
         time.sleep(1.0)
@@ -500,18 +525,25 @@ class Dungeon100Task(BaseTask):
                 self.log(f"  第{battles}场结束!")
             time.sleep(BATTLE_CHECK_INTERVAL)
 
-        self.log(f"  按键0 取消自动遇怪 (共{battles}场)")
-        self._safe_touch((950, 1590))
-        time.sleep(0.5)
+        # 取消前：确保战斗+结算彻底结束（0键落在战斗/结算界面会无效）
+        self._ensure_not_in_battle("取消遇怪前")
 
-        # 确认残留战斗
-        for _ in range(10):
-            if self._is_in_battle():
-                self.log(f"  残留战斗! 等待结束...")
-                self._wait_battle_end()
-                self.log(f"  残留战斗结束!")
+        # 取消：只按1次（多按会把 toggle 重新切换为开启）
+        self.log(f"  按键0 取消自动遇怪")
+        self._safe_touch((950, 1590))
+        time.sleep(1.0)
+
+        # 取消后：角色可能已锁定下一只怪，最多等2场残留战斗结束（不再按0）
+        for i in range(2):
+            if not self._running:
                 break
-            time.sleep(0.5)
+            time.sleep(2.0)
+            if self._is_in_battle():
+                self.log(f"  残留战斗(第{i + 1}场)，等待结束...")
+                self._wait_battle_end()
+            else:
+                break
+        self.log(f"  自动遇怪已取消")
 
     def _quest_teleport(self):
         """任务列表-&gt;确认-&gt;瞬间传送-&gt;提交任务"""
@@ -521,7 +553,8 @@ class Dungeon100Task(BaseTask):
         self._tap((500, 790), "瞬间传送", WAIT_TELEPORT)
         self.log_key("  传送完成")
         time.sleep(2.0)
-        self._submit_quest()
+        # 传送出副本后已在安全区，不再做战斗检测（阳谷UI的"自动"按钮会误触发_is_in_battle）
+        self._submit_quest(check_battle=False)
         self.log_key("  提交完成")
 
     # ── 断点续跑 (状态文件) ──────────────────────
