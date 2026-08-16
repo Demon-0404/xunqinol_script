@@ -304,27 +304,16 @@ class DungeonTie3Task(BaseTask):
         if self._is_in_battle() and self._running:
             self.log_key("  战斗未结束，等待本场结束再取消...")
             self._wait_battle_end()
-        # 等"战斗胜利"结算页消失，否则0键点击落在结算页上，取消失效
-        self._wait_victory_gone()
-        # 按0取消：取消后若又遇怪(说明没取消成功)，等这场结束再按0，反复直到不再遇怪
-        for attempt in range(6):
-            if not self._running:
+        self.log_key(f"  按键0 取消自动遇怪 (共{battles}场)")
+        self._safe_touch(KEY0); time.sleep(0.5)
+        time.sleep(1.0)
+        # 取消后确认无残留战斗（有就等结束，不再按0，避免多按一次导致状态反转）
+        for _ in range(10):
+            if self._is_in_battle() and self._running:
+                self.log_key("  残留战斗! 等待结束...")
+                self._wait_battle_end()
                 break
-            self.log_key(f"  按键0 取消自动遇怪 (第{attempt + 1}次)")
-            self._safe_touch(KEY0)
-            time.sleep(1.0)
-            cancelled = True
-            t0 = time.time()
-            while time.time() - t0 < 8 and self._running:
-                if self._is_in_battle():
-                    cancelled = False
-                    self.log_key("  又遇怪了! 等这场结束再取消...")
-                    self._wait_battle_end()
-                    break
-                time.sleep(0.5)
-            if cancelled:
-                self.log_key("  自动遇怪已取消")
-                break
+            time.sleep(0.5)
 
     # ── Boss 战 ────────────────────────────────
 

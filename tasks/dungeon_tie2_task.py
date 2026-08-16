@@ -636,6 +636,7 @@ class DungeonTie2Task(BaseTask):
         # Phase 6: 回忆之地 遇怪补足→找红衣女→交→接
         if start_phase <= 6:
             self._log_phase(6, "回忆之地 找红衣女→交→接")
+            self._battle_count = 0   # 只算回忆之地的战斗，排除走路途中渴望之境的怪
             if self._battle_count < MAX_BATTLES:
                 remaining = MAX_BATTLES - self._battle_count
                 self.log_key(f"战斗不足{MAX_BATTLES}场(当前{self._battle_count})，自动遇怪补{remaining}场")

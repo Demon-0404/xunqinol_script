@@ -282,6 +282,9 @@ class ChumoTask(BaseTask):
                 miss_count += 1
                 if miss_count >= 2:
                     self.log_key("  战斗结束!")
+                    if move_triggered:
+                        self.log("  按键0取消自动遇怪")
+                        self._touch(KEY0_ENTER, "数字键0取消遇怪")
                     return
             else:
                 miss_count = 0
@@ -291,40 +294,14 @@ class ChumoTask(BaseTask):
     # ── 流程步骤 ────────────────────────────────
 
     def _accept_quest(self):
-        """接取任务: 打开NPC列表 → 找大使 → 确认寻路 → 对话 → 进入"""
+        """接取任务: 键5对话 → 键0进入 → 键1选中 → 确认接任务"""
         self.log_key("── 接取任务 ──")
-
-        # 打开NPC列表(带验证)
-        if not self._open_npc_list():
-            return False
-
-        # OCR找大使(当前页→翻页)
-        y = self._find_ambassador_y()
-        if y is None:
-            self.log("  ⚠ 未找到大使，尝试Y=904")
-            y = 904
-
-        is_first_row = (y == ROW_Y_START)
-        if is_first_row:
-            # 已在第一位，省略"选中大使"这一步
-            self.log("  大实在第一位，跳过选中")
-        else:
-            self._touch((ROW_X, y), "日常活动大使")
-
-        # 确认选择 → 确认寻路
-        self._touch(CONFIRM, "确认选择")
-        self._touch(CONFIRM, "确认寻路")
-        self._sleep(5.0)
-
         # 键5 → 对话大使
         self._touch(KEY5, "数字键5对话")
-
         # 键0 → 进入仗剑除魔
         self._touch(KEY0_ENTER, "数字键0进入")
-
         # 键1 → 再次选中仗剑除魔
         self._touch(KEY1, "数字键1选中")
-
         # 确认接任务
         self._touch(CONFIRM_ACCEPT, "确认接任务")
         return True

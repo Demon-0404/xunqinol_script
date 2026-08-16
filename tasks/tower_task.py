@@ -535,7 +535,7 @@ class TowerTask(BaseTask):
                     return True
         return False
 
-    def _wait_for_round_disappear(self, timeout: float = 120.0):
+    def _wait_for_round_disappear(self, timeout: float = 300.0):
         start = time.time()
         miss_count = 0
         while time.time() - start < timeout and self._running:
