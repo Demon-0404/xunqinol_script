@@ -129,7 +129,9 @@ class DungeonTie2Task(BaseTask):
         return max_val > threshold
 
     def _is_in_battle(self) -> bool:
-        arr = self._screenshot_arr()
+        arr = self._stream_frame()
+        if arr is None:
+            arr = self._screenshot_arr()
         if arr is None:
             return False
         arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
@@ -146,12 +148,14 @@ class DungeonTie2Task(BaseTask):
         self.log_key(f"  检测到战斗! 等待结束... (第{self._battle_count + 1}场)")
         miss = 0
         t0 = time.time()
-        while miss < 3 and time.time() - t0 < (300 if is_boss else 60) and self._running:
-            time.sleep(0.5)
+        while self._running and time.time() - t0 < (300 if is_boss else 60):
+            time.sleep(0.3)
             if self._is_in_battle():
                 miss = 0
             else:
                 miss += 1
+                if miss >= 2 and time.time() - t0 >= 3.0:  # 最短3s，过滤开场过渡误判
+                    break
         if not self._running:
             return
         if is_boss:
@@ -160,7 +164,7 @@ class DungeonTie2Task(BaseTask):
             return
         self._battle_count += 1
         self.log_key(f"  战斗结束! 累计 {self._battle_count}/{MAX_BATTLES} 场")
-        time.sleep(1.0)
+        time.sleep(0.2)
 
     # ── 点击辅助 ────────────────────────────────
 
@@ -184,7 +188,9 @@ class DungeonTie2Task(BaseTask):
     # ── 地图名 ──────────────────────────────────
 
     def _get_map_name(self) -> str:
-        arr = self._screenshot_arr()
+        arr = self._stream_frame()
+        if arr is None:
+            arr = self._screenshot_arr()
         if arr is None:
             return ""
         y1, y2, x1, x2 = MAP_NAME_CROP
@@ -219,6 +225,13 @@ class DungeonTie2Task(BaseTask):
 
     # ── Phase 0: 步骤0传送 ──────────────────────
 
+    def _handle_vip_teleport_popup(self):
+        """点击瞬间传送后，vip3会弹'是否传送'确认框，需多按一次数字键5；无弹窗(高vip)则跳过"""
+        if self._check_text_at("是否传送", (540, 700), 300):
+            self.log_key("  检测到vip免费传送弹窗，多按一次5确认")
+            self._tap_key5()
+            time.sleep(1.0)
+
     def _step0_memo_enter(self):
         self.log_key("── 步骤0: 备忘→副本→OCR找浮游→瞬间传送 ──")
         self._tap(MEMO, "备忘", 1.2)
@@ -238,6 +251,7 @@ class DungeonTie2Task(BaseTask):
             return False
         self.log_key(f"  找到瞬间传送 @ {tp}")
         self._safe_touch(tp); self._sleep(3.0)
+        self._handle_vip_teleport_popup()
         self.log_key("  步骤0完成，已传送到副本入口")
         return True
 
@@ -264,17 +278,24 @@ class DungeonTie2Task(BaseTask):
                 self.log_key(f"  第{i + 1}次前遇怪! 等待战斗结束...")
                 self._wait_battle_end()
             self._safe_touch(pos)
-            time.sleep(WAIT_STEP)
-            name = self._get_map_name()
-            tag = "  [地图已变!]" if target_check(name) else ""
-            self.log_key(f"  第{i + 1}次后 地图: '{name}'{tag}")
-            if target_check(name):
-                return True
+            # 点击后立即轮询地图名(视频流快), 地图名横幅一出现就停, 避免等 WAIT_STEP 错过
+            t0 = time.time()
+            name = ""
+            while time.time() - t0 < WAIT_STEP and self._running:
+                time.sleep(0.4)
+                name = self._get_map_name()
+                if target_check(name):
+                    self.log_key(f"  第{i + 1}次后 地图: '{name}' [地图已变!]")
+                    return True
+            self.log_key(f"  第{i + 1}次后 地图: '{name}'")
         return False
 
     # ── 自动遇怪 ────────────────────────────────
 
     def _auto_battle_phase(self, count=2):
+        if self._is_in_battle() and self._running:
+            self.log_key("  开启自动遇怪前遇怪! 等待战斗结束...")
+            self._wait_battle_end()
         self.log_key(f"  按键0 开启自动遇怪 (目标{count}场)...")
         self._safe_touch(KEY0); time.sleep(1.0)
         battles = 0
@@ -300,6 +321,10 @@ class DungeonTie2Task(BaseTask):
                 self._wait_battle_end()
                 break
             time.sleep(0.5)
+        # 取消后确认：「剩」字仍在说明自动遇怪未关，补按一次0
+        if self._check_text_at("剩", (500, 1250), 150):
+            self.log_key("  自动遇怪未关闭(「剩」字仍在)，补按一次0")
+            self._safe_touch(KEY0); time.sleep(0.5)
 
     # ── Boss 战 ────────────────────────────────
 
@@ -363,6 +388,11 @@ class DungeonTie2Task(BaseTask):
     def _open_npc_list(self):
         for retry in range(3):
             self.log(f"  打开周围列表... (尝试{retry + 1}/3)")
+            # 点击前检查战斗：战斗状态下点击会无效
+            if self._is_in_battle():
+                self.log("  打开列表前遇怪! 等待战斗结束...")
+                self._wait_battle_end()
+                time.sleep(0.5)
             self._safe_touch(NEARBY_BTN)
             time.sleep(1.5)
             if self._check_text_at("周围列表", PANEL_TITLE_CHECK, PANEL_TITLE_SPREAD):
@@ -372,6 +402,10 @@ class DungeonTie2Task(BaseTask):
                 self._dismiss_panels()
                 time.sleep(0.5)
                 continue
+            # 点击NPC标签前检查战斗
+            if self._is_in_battle():
+                self.log("  打开NPC标签前遇怪! 等待战斗结束...")
+                self._wait_battle_end()
             self._safe_touch(NPC_TAB)
             time.sleep(1.2)
             if self._verify_npc_panel():
@@ -433,6 +467,9 @@ class DungeonTie2Task(BaseTask):
                     return (name, y)
             if page < 4:
                 self.log(f"  第{page}页未找到，翻页...")
+                if self._is_in_battle():
+                    self.log("  翻页前遇怪! 等待战斗结束...")
+                    self._wait_battle_end()
                 self._safe_touch(NEXT_PAGE)
                 time.sleep(0.8)
             else:
@@ -448,6 +485,10 @@ class DungeonTie2Task(BaseTask):
             self.log_key(f"  [失败] 未找到{target_npc}，跳过")
             return False
         name, y = result
+        # 点击NPC行前检查战斗(_find_npc 期间可能遇怪)
+        if self._is_in_battle():
+            self.log_key("  点击NPC前遇怪! 等待战斗结束...")
+            self._wait_battle_end()
         self.log_key(f"  点击NPC: '{name}' @ Y={y}")
         self._safe_touch((ROW_X, y))
         time.sleep(0.5)
@@ -455,8 +496,15 @@ class DungeonTie2Task(BaseTask):
             self._safe_touch(KEY5)
         else:
             # 非第一行：再点一次该行，才弹出自动寻路菜单
+            if self._is_in_battle():
+                self.log_key("  点击NPC行前遇怪! 等待战斗结束...")
+                self._wait_battle_end()
             self._safe_touch((ROW_X, y))
             time.sleep(0.5)
+            # 点击自动寻路前检查战斗
+            if self._is_in_battle():
+                self.log_key("  点击自动寻路前遇怪! 等待战斗结束...")
+                self._wait_battle_end()
             self._safe_touch(AUTO_PATHFIND)
             time.sleep(0.3)
         self.log("  自动寻路中(监测战斗)...")

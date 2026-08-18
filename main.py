@@ -80,7 +80,7 @@ class App:
         self._notebook = None         # 标签页容器
         self._blood_monitors = {}  # name -> BloodMonitor
         self._blood_widgets = {}  # name -> (frame, status_label, btn)
-        self._dungeon100_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 10)]
+        self._dungeon100_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 11)]
         self._dungeon90_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 13)]
         self._tie1_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 14)]
         self._tie2_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 11)]
@@ -141,14 +141,23 @@ class App:
         style.configure("TSpinbox", fieldbackground=C_BG_INPUT, background=C_BG_PANEL,
                         foreground=C_TEXT, arrowcolor=C_PRIMARY)
 
-        # 顶部 ASCII 横幅（霓虹绿等宽大字）
-        banner = tk.Label(self.root, text=BANNER_ASCII, bg=C_BG, fg=C_PRIMARY,
-                          font=(FONT_MONO, 9, "bold"), justify=tk.LEFT, anchor=tk.W)
-        banner.pack(fill=tk.X, padx=12, pady=(10, 0))
+        # 顶部区域：左侧横幅 + 右侧今日任务看板
+        top_bar = ttk.Frame(self.root)
+        top_bar.pack(fill=tk.X, padx=12, pady=(10, 0))
 
-        sub = tk.Label(self.root, text="寻秦OL · 多设备自动化控制台",
+        left = ttk.Frame(top_bar)
+        left.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        banner = tk.Label(left, text=BANNER_ASCII, bg=C_BG, fg=C_PRIMARY,
+                          font=(FONT_MONO, 9, "bold"), justify=tk.LEFT, anchor=tk.W)
+        banner.pack(fill=tk.X)
+
+        sub = tk.Label(left, text="寻秦OL · 多设备自动化控制台",
                        bg=C_BG, fg=C_DIM, font=(FONT_UI, 10))
-        sub.pack(anchor=tk.W, padx=14, pady=(0, 2))
+        sub.pack(anchor=tk.W, pady=(0, 2))
+
+        # 右侧：今日任务紧凑看板
+        self._build_today_panel(top_bar)
 
         # 顶部：多设备管理栏
         top = ttk.LabelFrame(self.root, text="设备管理", padding=6)
@@ -181,7 +190,6 @@ class App:
         notebook.grid(row=0, column=0, sticky="nsew")
         self._notebook = notebook
 
-        self._build_today_tab(notebook)
         self._build_dungeon90_tab(notebook)
         self._build_dungeon100_tab(notebook)
         self._build_tie1_tab(notebook)
@@ -212,31 +220,29 @@ class App:
 
     # ── 今日任务看板 ─────────────────────────────
 
-    def _build_today_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="今日任务")
+    def _build_today_panel(self, parent):
+        panel = ttk.LabelFrame(parent, text="今日任务", padding=6)
+        panel.pack(side=tk.RIGHT, anchor=tk.N, padx=(12, 0))
 
-        header = ttk.Frame(tab)
-        header.pack(fill=tk.X, pady=(0, 6))
-        self._today_date_label = ttk.Label(header, text="", font=(FONT_UI, 12, "bold"))
+        header = ttk.Frame(panel)
+        header.pack(fill=tk.X, pady=(0, 4))
+        self._today_date_label = ttk.Label(header, text="", font=(FONT_UI, 11, "bold"))
         self._today_date_label.pack(side=tk.LEFT)
         self._today_summary_label = ttk.Label(header, text="", foreground=C_DIM)
-        self._today_summary_label.pack(side=tk.LEFT, padx=12)
+        self._today_summary_label.pack(side=tk.LEFT, padx=8)
 
-        ttk.Label(tab, text="黄色 = 已打    绿色 = 未打    点击块可手动切换",
-                  foreground=C_DIM).pack(anchor=tk.W, pady=(0, 6))
+        ttk.Label(panel, text="黄=已打  绿=未打  点击切换",
+                  foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
 
-        grid = ttk.Frame(tab)
-        grid.pack(fill=tk.BOTH, expand=True)
+        grid = ttk.Frame(panel)
+        grid.pack()
         for i, (key, name) in enumerate(self._today_tasks):
-            lbl = tk.Label(grid, text=name, font=(FONT_UI, 12, "bold"),
-                           fg=C_TODO_FG, bg=C_TODO_BG, padx=20, pady=18,
-                           width=12, relief=tk.FLAT, bd=0, cursor="hand2")
-            lbl.grid(row=i // 4, column=i % 4, padx=6, pady=6, sticky="nsew")
+            lbl = tk.Label(grid, text=name, font=(FONT_UI, 10, "bold"),
+                           fg=C_TODO_FG, bg=C_TODO_BG, padx=8, pady=6,
+                           width=8, relief=tk.FLAT, bd=0, cursor="hand2")
+            lbl.grid(row=i // 4, column=i % 4, padx=3, pady=3)
             lbl.bind("<Button-1>", lambda e, k=key: self._toggle_task_done(k))
             self._today_labels[key] = lbl
-        for c in range(4):
-            grid.grid_columnconfigure(c, weight=1)
 
         self._refresh_today_tab()
 
@@ -609,17 +615,18 @@ class App:
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
 
         help_text = (
-            "Phase 0: 进入副本(阳谷→惊凡渊)\n"
-            "Phase 1: 惊凡渊走路+传送门 → 裂影渊\n"
-            "Phase 2: 裂影渊 找洞渊战魂→交任务→接任务\n"
-            "Phase 3: 裂影渊 洞渊战魂Boss战→交任务→接任务\n"
-            "Phase 4: 裂影渊→泣魔渊 传送门\n"
-            "Phase 5: 泣魔渊→陨仙渊 走路+传送门\n"
-            "Phase 6: 陨仙渊 找百鬼之王→交任务→接任务\n"
-            "Phase 7: 陨仙渊 遇怪2场→找百鬼之王→交任务→接任务\n"
-            "Phase 8: 陨仙渊 百鬼之王Boss战→交任务→接任务×2\n"
-            "Phase 9: 陨仙渊→阳谷 传送出地图+提交任务\n"
-            "使用条件: 角色需已在NPC面前，坐标基于1080x1920"
+            "Phase 0: 从备忘打开副本(混沌邪灵渊→瞬间传送)\n"
+            "Phase 1: 进入副本(阳谷→惊凡渊)\n"
+            "Phase 2: 惊凡渊走路+传送门 → 裂影渊\n"
+            "Phase 3: 裂影渊 找洞渊战魂→交任务→接任务\n"
+            "Phase 4: 裂影渊 洞渊战魂Boss战→交任务→接任务\n"
+            "Phase 5: 裂影渊→泣魔渊 传送门\n"
+            "Phase 6: 泣魔渊→陨仙渊 走路+传送门\n"
+            "Phase 7: 陨仙渊 找百鬼之王→交任务→接任务\n"
+            "Phase 8: 陨仙渊 遇怪2场→找百鬼之王→交任务→接任务\n"
+            "Phase 9: 陨仙渊 百鬼之王Boss战→交任务→接任务×2\n"
+            "Phase 10: 陨仙渊→阳谷 传送出地图+提交任务\n"
+            "使用条件: 从备忘自动打开副本，坐标基于1080x1920"
         )
         ttk.Label(tab, text=help_text, foreground=C_DIM,
                   justify=tk.LEFT).pack(anchor=tk.W, pady=4)

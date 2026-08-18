@@ -124,6 +124,18 @@ class BaseTask(ABC):
             self._switch_self()
             return snapshot()
 
+    def _stream_frame(self):
+        """从 scrcpy 视频流取最新帧 (RGB ndarray)；流不可用返回 None"""
+        try:
+            serial = getattr(self, "_serial", "")
+            if not serial:
+                return None
+            from core.screen_stream import get_stream
+            frame, _ = get_stream(serial).get_frame()
+            return frame
+        except Exception:
+            return None
+
     def _safe_exists(self, tmpl):
         """线程安全的模板匹配 —— 返回 (pos, score) 或 False"""
         from airtest.core.api import exists
