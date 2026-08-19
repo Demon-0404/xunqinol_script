@@ -142,6 +142,27 @@ class DungeonTie1Task(BaseTask):
             return True
         return False
 
+    def _check_dialog_popup(self) -> bool:
+        """检测对话对话框弹窗(走到NPC跟前才出现)：上部区域全宽(y<800, x=0-1080)出现'按5键'提示。
+        模糊匹配'按5键'/'按5'/'5键'，避开战斗结算'按5键继续'(y~950)。"""
+        arr = self._stream_frame()
+        if arr is None:
+            return False
+        h, w = arr.shape[:2]
+        x1, x2 = 0, w
+        y1, y2 = 0, min(h, 800)
+        crop = arr[y1:y2, x1:x2, :]
+        reader = self._get_reader()
+        try:
+            results = reader.readtext(crop)
+        except Exception:
+            return False
+        for r in results:
+            text = r[1]
+            if r[2] >= 0.1 and ("按5键" in text or "按5" in text or "5键" in text):
+                return True
+        return False
+
     def _wait_battle_end(self, is_boss: bool = False):
         miss = 0
         t0 = time.time()
@@ -277,41 +298,107 @@ class DungeonTie1Task(BaseTask):
 
     # ── 自动遇怪 ────────────────────────────────
 
+    def _check_popup_text(self, keyword: str, cx: int, cy: int, half_w: int, half_h: int) -> bool:
+        """矩形区域检测短命弹窗文字(视频流+局部OCR)。流取不到帧直接放弃，不回退慢速screencap"""
+        arr = self._stream_frame()
+        if arr is None:
+            return False
+        h, w = arr.shape[:2]
+        x1, x2 = max(0, cx - half_w), min(w, cx + half_w)
+        y1, y2 = max(0, cy - half_h), min(h, cy + half_h)
+        if x2 <= x1 or y2 <= y1:
+            return False
+        crop = arr[y1:y2, x1:x2, :]
+        reader = self._get_reader()
+        try:
+            results = reader.readtext(crop)
+        except Exception:
+            return False
+        for r in results:
+            if r[2] >= 0.1 and keyword in r[1]:
+                return True
+        return False
+
+    def _check_cancel_popup(self) -> bool:
+        """检测取消弹窗：'状态取消'或'取消'任一命中(窄横条，排除右下角取消按钮)"""
+        arr = self._stream_frame()
+        if arr is None:
+            return False
+        h, w = arr.shape[:2]
+        x1, x2 = 450, min(w, 720)
+        y1, y2 = 640, min(h, 750)
+        crop = arr[y1:y2, x1:x2, :]
+        reader = self._get_reader()
+        try:
+            results = reader.readtext(crop)
+        except Exception:
+            return False
+        for r in results:
+            text = r[1]
+            if r[2] >= 0.1 and ("状态取消" in text or "取消" in text):
+                return True
+        return False
+
+    def _cancel_auto_battle(self):
+        """取消自动遇怪：确保非战斗 → 按0 → 高频检测'状态取消/取消'弹窗确认，失败重试"""
+        for attempt in range(3):
+            if not self._running:
+                return
+            if self._is_in_battle():
+                self.log_key("  [取消遇怪前] 检测到战斗，先等待结束...")
+                self._wait_battle_end()
+            self.log_key(f"  按键0 取消自动遇怪 (第{attempt + 1}次)")
+            self._ensure_stream_fresh()
+            self._safe_touch(KEY0)
+            t0 = time.time()
+            while time.time() - t0 < 2.0 and self._running:
+                if self._check_cancel_popup():
+                    self.log_key("  已确认取消: '自动遇怪状态取消!'")
+                    return
+                time.sleep(0.15)
+            self.log_key("  未检测到取消弹窗，重试...")
+        self.log_key("  [警告] 自动遇怪取消未确认成功")
+
     def _auto_battle_phase(self, count=2):
+        """键0开启自动遇怪，等N场战斗后键0取消（0键是toggle，取消只在非战斗时有效）"""
         if self._is_in_battle() and self._running:
             self.log_key("  开启自动遇怪前遇怪! 等待战斗结束...")
             self._wait_battle_end()
-        self.log_key(f"  按键0 开启自动遇怪 (目标{count}场)...")
-        self._safe_touch(KEY0); time.sleep(1.0)
-        battles = 0
+        self.log_key("  按键0 开启自动遇怪...")
+        self._ensure_stream_fresh()
+        self._safe_touch(KEY0)
+        started = False
         t0 = time.time()
-        while battles < count and time.time() - t0 < 300 and self._running:
+        while time.time() - t0 < 2.0 and self._running:
+            if self._check_popup_text("处于自动遇怪", 500, 695, 200, 55):
+                self.log_key("  已确认开启: '你现在处于自动遇怪状态!'")
+                started = True
+                break
+            time.sleep(0.15)
+        if not started:
+            self.log_key("  [警告] 自动遇怪开启未确认成功")
+
+        battles = 0
+        while battles < count and self._running:
             if self._is_in_battle():
                 battles += 1
-                self.log_key(f"  [战斗] 第{battles}场开始...")
+                self.log_key(f"  第{battles}场战斗...")
                 self._wait_battle_end()
-                self.log_key(f"  [战斗] 第{battles}场结束")
-            time.sleep(0.2)
-        # 确保战斗已结束再点取消（按键0落在战斗界面会无效）
-        if self._is_in_battle() and self._running:
-            self.log_key("  战斗未结束，等待本场结束再取消...")
-            self._wait_battle_end()
-        self.log_key(f"  按键0 取消自动遇怪 (共{battles}场)")
-        self._safe_touch(KEY0); time.sleep(0.3)
-        time.sleep(0.5)
-        # 取消后确认无残留战斗（有就等结束，不再按0，避免多按反转）
-        for _ in range(3):
+                self.log_key(f"  第{battles}场结束!")
+            time.sleep(BATTLE_CHECK_INTERVAL)
+
+        self._cancel_auto_battle()
+
+        for i in range(2):
             if not self._running:
                 break
+            time.sleep(2.0)
             if self._is_in_battle():
-                self.log_key("  残留战斗! 等待结束...")
+                self.log_key(f"  残留战斗(第{i + 1}场)，等待结束...")
                 self._wait_battle_end()
+            else:
                 break
-            time.sleep(0.3)
-        # 取消后确认：「剩」字仍在说明自动遇怪未关，补按一次0
-        if self._check_text_at("剩", (500, 1250), 150):
-            self.log_key("  自动遇怪未关闭(「剩」字仍在)，补按一次0")
-            self._safe_touch(KEY0); time.sleep(0.5)
+        self.log_key("  自动遇怪已取消")
 
     # ── Boss 战 ────────────────────────────────
 
@@ -479,19 +566,23 @@ class DungeonTie1Task(BaseTask):
         self.log_key(f"  点击NPC: '{name}' @ Y={y}")
         self._safe_touch((ROW_X, y))
         time.sleep(0.5)
-        if y == ROW_Y_START:
-            self._safe_touch(KEY5)
-        else:
-            # 点击自动寻路前检查战斗
-            if self._is_in_battle():
-                self.log_key("  点击自动寻路前遇怪! 等待战斗结束...")
-                self._wait_battle_end()
-            self._safe_touch(AUTO_PATHFIND)
-            time.sleep(0.3)
-            self._safe_touch(KEY5)
+        # 再点一次该行，才弹出自动寻路菜单
+        if self._is_in_battle():
+            self.log_key("  点击NPC行前遇怪! 等待战斗结束...")
+            self._wait_battle_end()
+        self._safe_touch((ROW_X, y))
+        time.sleep(0.5)
+        # 点击自动寻路前检查战斗
+        if self._is_in_battle():
+            self.log_key("  点击自动寻路前遇怪! 等待战斗结束...")
+            self._wait_battle_end()
+        self._safe_touch(AUTO_PATHFIND)
+        time.sleep(0.3)
         self.log("  自动寻路中(监测战斗)...")
-        PATHFIND_WAIT = 8.0
+        PATHFIND_WAIT = 20.0
         MAX_PATHFIND_ROUNDS = 4
+        DIALOG_CHECK_AFTER = 2.0   # 寻路2s后才检测对话弹窗(走到NPC跟前才会弹)
+        arrived = False
         for attempt in range(MAX_PATHFIND_ROUNDS):
             elapsed = 0.0
             while elapsed < PATHFIND_WAIT and self._running:
@@ -500,11 +591,19 @@ class DungeonTie1Task(BaseTask):
                     self._wait_battle_end()
                     self.log_key("  继续寻路...")
                     break
+                if elapsed >= DIALOG_CHECK_AFTER and self._check_dialog_popup():
+                    self.log_key(f"  检测到对话对话框，已到达{target_npc}")
+                    arrived = True
+                    break
                 time.sleep(0.3)
                 elapsed += 0.3
             else:
                 self.log("  寻路完成")
+                arrived = True
+            if arrived:
                 break
+        if not arrived:
+            self.log("  寻路等待达上限")
         if self._is_in_battle():
             self._wait_battle_end()
         self.log_key(f"  到达 {target_npc}")

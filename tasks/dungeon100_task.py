@@ -23,10 +23,6 @@ ROUND_RANGE = 200
 BATTLE_MODE_CHECK = (1000, 1450) # "自动"/"手动"按钮
 BATTLE_MODE_RANGE = 100
 
-# 结算检测
-SETTLE_CHECK = (800, 950)        # "按5键继续"
-SETTLE_RANGE = 200
-
 # 步骤0: 备忘→副本→翻页→OCR找混沌邪灵渊→瞬间传送
 MEMO = (1000, 1200)              # 备忘
 DUNGEON_TAB = (750, 200)         # 副本标签
@@ -175,26 +171,6 @@ class Dungeon100Task(BaseTask):
             return True
         return False
 
-    def _has_settlement(self) -> bool:
-        arr = self._screenshot_arr()
-        if arr is None:
-            return False
-        h, w = arr.shape[:2]
-        cx, cy = SETTLE_CHECK
-        s = SETTLE_RANGE
-        y1, y2 = max(0, cy - s), min(h, cy + s)
-        x1, x2 = max(0, cx - s), min(w, cx + s)
-        crop = arr[y1:y2, x1:x2, :]
-        reader = self._get_reader()
-        try:
-            results = reader.readtext(crop)
-        except Exception:
-            return False
-        for r in results:
-            if r[2] >= 0.1 and "按5键继续" in r[1]:
-                return True
-        return False
-
     # ── 点击辅助 ────────────────────────────────
 
     def _tap(self, pos: tuple, desc: str = "", wait: float = None):
@@ -210,7 +186,7 @@ class Dungeon100Task(BaseTask):
 
     # ── 战斗循环 ────────────────────────────────
 
-    def _wait_battle_end(self, is_boss: bool = False, skip_settlement: bool = False):
+    def _wait_battle_end(self, is_boss: bool = False):
         self.log_key(f"  检测到战斗! 等待结束... (第{self._battle_count + 1}场)")
         miss = 0
         t0 = time.time()
@@ -229,37 +205,14 @@ class Dungeon100Task(BaseTask):
             time.sleep(BATTLE_CHECK_INTERVAL)
 
         if is_boss:
-            # Boss战结束不点结算弹窗，避免打乱后续流程，只延时
+            # Boss战结束靠延时自动消失，不点任何弹窗
             time.sleep(12.0)
-            return
-
-        if skip_settlement:
-            # 跳过结算处理，尽快返回（用于自动遇怪最后一场，抢在角色锁定下一只怪前取消）
-            return
-
-        # 结算弹窗
-        time.sleep(1.0)
-        for _ in range(5):
-            if self._has_settlement():
-                self._tap_key5()
-                time.sleep(0.5)
-            else:
-                break
 
     def _ensure_not_in_battle(self, tag=""):
-        """关键点击前确保非战斗：先等战斗结束，再清残留结算弹窗"""
+        """关键点击前确保非战斗"""
         if self._is_in_battle():
             self.log(f"  [{tag}] 检测到战斗，先等待结束...")
             self._wait_battle_end()
-        # 兜底清理残留结算弹窗（战斗UI已消失但结算页还在）
-        time.sleep(0.5)
-        for _ in range(3):
-            if self._has_settlement():
-                self.log(f"  [{tag}] 残留结算弹窗，按5关闭...")
-                self._tap_key5()
-                time.sleep(0.5)
-            else:
-                break
 
     # ── Phase 0: 从备忘打开副本 ────────────────────
 
@@ -496,15 +449,14 @@ class Dungeon100Task(BaseTask):
         return False
 
     def _check_dialog_popup(self) -> bool:
-        """检测对话对话框弹窗(走到NPC跟前才出现)：对话区出现'按5键'提示。
-        限定y<600避开战斗结算的'按5键继续'(y~950)。"""
+        """检测对话对话框弹窗(走到NPC跟前才出现)：上部区域全宽(y<800, x=0-1080)出现'按5键'提示。
+        模糊匹配'按5键'/'按5'/'5键'，避开战斗结算'按5键继续'(y~950)。"""
         arr = self._stream_frame()
         if arr is None:
             return False
         h, w = arr.shape[:2]
-        # '按5键'对话提示 bbox x[809,959] y[399,465]
-        x1, x2 = 740, min(w, 1030)
-        y1, y2 = 360, min(h, 520)
+        x1, x2 = 0, w
+        y1, y2 = 0, min(h, 800)
         crop = arr[y1:y2, x1:x2, :]
         reader = self._get_reader()
         try:
@@ -512,7 +464,8 @@ class Dungeon100Task(BaseTask):
         except Exception:
             return False
         for r in results:
-            if r[2] >= 0.1 and "按5键" in r[1]:
+            text = r[1]
+            if r[2] >= 0.1 and ("按5键" in text or "按5" in text or "5键" in text):
                 return True
         return False
 
@@ -651,12 +604,8 @@ class Dungeon100Task(BaseTask):
         self._ensure_not_in_battle("点击NPC")
         self._safe_touch((ROW_X, y))
         time.sleep(0.5)
-        if y == ROW_Y_START:
-            self._safe_touch(KEY5)
-        else:
-            self._safe_touch(AUTO_PATHFIND)
-            time.sleep(0.3)
-            self._safe_touch(KEY5)
+        self._safe_touch(AUTO_PATHFIND)
+        time.sleep(0.3)
         self.log("  自动寻路中(监测战斗)...")
 
         PATHFIND_WAIT = 20.0
@@ -719,11 +668,11 @@ class Dungeon100Task(BaseTask):
         for attempt in range(3):
             if not self._running:
                 return
-            # 轻量确认非战斗（不做结算处理，抢在角色锁定下一只怪前取消）
             if self._is_in_battle():
                 self.log("  [取消遇怪前] 检测到战斗，先等待结束...")
-                self._wait_battle_end(skip_settlement=True)
+                self._wait_battle_end()
             self.log(f"  按键0 取消自动遇怪 (第{attempt + 1}次)")
+            self._ensure_stream_fresh()
             self._safe_touch((950, 1590))
             # 弹窗约1s即消失，按0后立即高频轮询(视频流+局部OCR，模糊匹配'状态取消'/'取消')
             t0 = time.time()
@@ -738,6 +687,7 @@ class Dungeon100Task(BaseTask):
     def _auto_battle_phase(self, count: int = 2):
         """键0开启自动遇怪，等N场战斗后键0取消（0键是toggle，取消只在非战斗时有效）"""
         self.log(f"  按键0 开启自动遇怪...")
+        self._ensure_stream_fresh()
         self._safe_touch((950, 1590))  # KEY0
         # 成功后弹"你现在处于自动遇怪状态!"，约1s即消失，需快速轮询确认
         # (不重按：0键是toggle，误按会反向取消)
@@ -757,27 +707,13 @@ class Dungeon100Task(BaseTask):
             if self._is_in_battle():
                 battles += 1
                 self.log(f"  第{battles}场战斗...")
-                is_last = battles >= count
-                # 最后一场跳过结算处理，战斗一结束立刻返回，抢在角色锁定下一只怪前取消
-                self._wait_battle_end(skip_settlement=is_last)
+                self._wait_battle_end()
                 self.log(f"  第{battles}场结束!")
-                if is_last:
-                    break
 
             time.sleep(BATTLE_CHECK_INTERVAL)
 
         # 取消：必须在非战斗时点击，成功后弹"自动遇怪状态取消!"
         self._cancel_auto_battle()
-
-        # 最后一场跳过了结算处理，取消后补清理残留结算弹窗
-        for _ in range(5):
-            if not self._running:
-                break
-            if self._has_settlement():
-                self._tap_key5()
-                time.sleep(0.5)
-            else:
-                break
 
         # 取消后：角色可能已锁定下一只怪，最多等2场残留战斗结束（不再按0）
         for i in range(2):

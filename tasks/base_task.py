@@ -136,6 +136,25 @@ class BaseTask(ABC):
         except Exception:
             return None
 
+    def _ensure_stream_fresh(self, timeout: float = 3.0) -> bool:
+        """按0前预热：确保视频流有新鲜帧，死了就等自愈重启完再操作，避免流空窗漏弹窗。
+        流活时零开销(get_frame 直接返回)；只在流死时多等至多 timeout 秒。"""
+        try:
+            serial = getattr(self, "_serial", "")
+            if not serial:
+                return False
+            from core.screen_stream import get_stream
+            st = get_stream(serial)
+            t0 = time.time()
+            while time.time() - t0 < timeout and self._running:
+                frame, _ = st.get_frame()
+                if frame is not None:
+                    return True
+                time.sleep(0.1)
+            return False
+        except Exception:
+            return False
+
     def _safe_exists(self, tmpl):
         """线程安全的模板匹配 —— 返回 (pos, score) 或 False"""
         from airtest.core.api import exists

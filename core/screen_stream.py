@@ -28,7 +28,7 @@ SCRCPY_SERVER = r"D:/Setup_and_Downloads/Setup/op/scrcpy-server"
 FFMPEG = r"D:/Setup_and_Downloads/Setup/FormatFactory/ffmpeg.exe"
 
 _PORT_BASE = 27100
-_RESTART_INTERVAL = 10.0   # 流挂掉后的最小重试间隔(秒)，防止设备离线时每张截图都卡重连
+_RESTART_INTERVAL = 2.0    # 流挂掉后的最小重试间隔(秒)，快速自愈；设备离线时每2s重试一次
 _STALE_FRAME_SECONDS = 2.0 # 帧超过该秒数未更新即视为流卡死(zombie)，触发回退/重启
 _port_counter = 0
 _port_lock = threading.Lock()
@@ -88,7 +88,10 @@ class ScreenStream:
         self._drainer = None
         self._stop = threading.Event()
         self._alive = False
+        self._gen = 0               # 每次 start() 自增，隔离旧线程的 _mark_dead
         self._last_start_ts = 0.0
+        self._display_id = None     # 缓存探测到的 display id，重启复用
+        self._jar_ready = False     # scrcpy-server.jar 是否已 push，重启复用
 
     # ── 生命周期 ────────────────────────────────
 
@@ -158,30 +161,65 @@ class ScreenStream:
                     best, best_val = did, v
         return best
 
+    def _ensure_jar(self) -> bool:
+        """确保 scrcpy-server.jar 已就位。已 push 过则跳过（push 是重启主要耗时）"""
+        if self._jar_ready:
+            return True
+        try:
+            local_size = os.path.getsize(SCRCPY_SERVER)
+            r = self._adb("shell", "stat", "-c", "%s",
+                          "/data/local/tmp/scrcpy-server.jar", timeout=6)
+            if r.stdout.strip().isdigit() and int(r.stdout.strip()) == local_size:
+                self._jar_ready = True
+                return True
+        except Exception:
+            pass
+        try:
+            self._adb("push", SCRCPY_SERVER, "/data/local/tmp/scrcpy-server.jar", timeout=15)
+            self._jar_ready = True
+            return True
+        except Exception:
+            return False
+
+    def _mark_launch_failed(self):
+        """握手/解码失败：重置 jar/display 缓存（设备可能重启过），清理现场"""
+        self._jar_ready = False
+        self._display_id = None
+        self._cleanup_proc()
+
     def start(self):
         if self._alive:
             return
+        self._gen += 1
         self._last_start_ts = time.time()
         self._stop.clear()
         with self._lock:
             self._frame = None
+
+        if not self._ensure_jar():
+            return
+
         self._kill_device_server()
         try:
             self._adb("forward", "--remove-all", timeout=5)
-            self._adb("shell", "rm", "-f", "/data/local/tmp/scrcpy-server.jar", timeout=5)
-            self._adb("push", SCRCPY_SERVER, "/data/local/tmp/scrcpy-server.jar")
-            self._adb("forward", f"tcp:{self.port}", "localabstract:scrcpy")
+            self._adb("forward", f"tcp:{self.port}", "localabstract:scrcpy", timeout=5)
         except Exception:
             return
 
-        did = self._detect_display_id()
+        if self._display_id is None:
+            self._display_id = self._detect_display_id()
+
+        self._launch_server()
+
+    def _launch_server(self):
+        """启动 server 进程 + 握手 + 拉起解码线程（复用已就位的 jar/forward/display）"""
         server_cmd = ("CLASSPATH=/data/local/tmp/scrcpy-server.jar "
                       "app_process / com.genymobile.scrcpy.Server 2.4 "
                       "log_level=info max_size=0 max_fps=%d video_codec=h264 "
                       "tunnel_forward=true control=false audio=false "
                       "lock_video_orientation=0" % self.max_fps)
-        if did != 0:
-            server_cmd += " display_id=%d" % did
+        if self._display_id and self._display_id != 0:
+            server_cmd += " display_id=%d" % self._display_id
         # setsid 脱离 adb shell 进程组：MuMu 回收 shell 会话时不会连带 SIGKILL server
         full_cmd = ("setsid nohup sh -c '%s' "
                     ">/data/local/tmp/scrcpy.log 2>&1 &" % server_cmd)
@@ -207,7 +245,7 @@ class ScreenStream:
                     pass
             time.sleep(0.2)
         if sock is None:
-            self._cleanup_proc()
+            self._mark_launch_failed()
             return
         sock.settimeout(5)
         self._socket = sock
@@ -218,7 +256,7 @@ class ScreenStream:
             self.codec_id = codec_id
             self.width, self.height = w, h
         except Exception:
-            self._cleanup_proc()
+            self._mark_launch_failed()
             return
 
         # 启动 ffmpeg 解码器
@@ -232,7 +270,7 @@ class ScreenStream:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL)
         except Exception:
-            self._cleanup_proc()
+            self._mark_launch_failed()
             return
 
         self._alive = True
@@ -244,6 +282,10 @@ class ScreenStream:
     def stop(self):
         self._stop.set()
         if self._socket:
+            try:
+                self._socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
             try:
                 self._socket.close()
             except Exception:
@@ -286,8 +328,13 @@ class ScreenStream:
             return False
         if self._reader is None or not self._reader.is_alive():
             return False
+        if self._drainer is None or not self._drainer.is_alive():
+            return False
         with self._lock:
-            if self._frame is not None and time.time() - self._frame_ts > _STALE_FRAME_SECONDS:
+            if self._frame is None:
+                # zombie：启动后迟迟无第一帧 → 判死；刚启动还在等首帧，算活
+                return time.time() - self._last_start_ts <= _STALE_FRAME_SECONDS
+            if time.time() - self._frame_ts > _STALE_FRAME_SECONDS:
                 return False
         return True
 
@@ -295,6 +342,7 @@ class ScreenStream:
 
     def _reader_loop(self):
         """socket → ffmpeg stdin"""
+        gen = self._gen
         try:
             while not self._stop.is_set():
                 hdr = _read_sock(self._socket, 12)
@@ -307,10 +355,11 @@ class ScreenStream:
         except Exception:
             pass
         finally:
-            self._mark_dead()
+            self._mark_dead(gen)
 
     def _drain_loop(self):
         """ffmpeg stdout → 最新帧缓存"""
+        gen = self._gen
         frame_size = self.width * self.height * 3
         try:
             while not self._stop.is_set():
@@ -324,9 +373,11 @@ class ScreenStream:
         except Exception:
             pass
         finally:
-            self._mark_dead()
+            self._mark_dead(gen)
 
-    def _mark_dead(self):
+    def _mark_dead(self, gen: int):
+        if gen != self._gen:
+            return                      # 旧线程收尾，不影响新流
         self._alive = False
         with self._lock:
             self._frame = None
