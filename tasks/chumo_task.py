@@ -28,7 +28,7 @@ ROW_SPACING = 120
 ROW_COUNT = 7
 AMBASSADOR_KEYWORD = "日常活动大使"
 
-# 战斗检测(复用玄兵塔方案)
+# 战斗检测(OCR文字识别)
 ROUND_CHECK = (500, 200)
 ROUND_RANGE = 200
 BATTLE_MODE_CHECK = (1000, 1450)
@@ -66,7 +66,7 @@ class ChumoTask(BaseTask):
     def _adb(self) -> str:
         return os.environ.get("ANDROID_ADB", "adb")
 
-    def _touch(self, pos: tuple, desc: str = ""):
+    def _touch(self, pos: tuple, desc: str = "", wait: float = WAIT_CLICK):
         if not self._running:
             return
         x, y = pos
@@ -78,7 +78,7 @@ class ChumoTask(BaseTask):
         subprocess.run(
             args + ["shell", "input", "tap", str(x), str(y)],
             capture_output=True, timeout=5)
-        self._sleep(WAIT_CLICK)
+        self._sleep(wait)
 
     def _screenshot_arr(self) -> np.ndarray:
         adb = self._adb()
@@ -234,12 +234,16 @@ class ChumoTask(BaseTask):
         self.log("  ⚠ 两页都没找到大使")
         return None
 
-    # ── 战斗检测(复用玄兵塔) ──────────────────────
+    # ── 战斗检测(OCR文字识别) ────────────────────
 
     def _is_in_battle(self) -> bool:
-        try:
-            arr = self._screenshot_arr()
-        except Exception:
+        arr = self._stream_frame()
+        if arr is None:
+            try:
+                arr = self._screenshot_arr()
+            except Exception:
+                return False
+        if arr is None:
             return False
         h, w = arr.shape[:2]
         reader = self._get_reader()
@@ -260,6 +264,59 @@ class ChumoTask(BaseTask):
                 continue
         return False
 
+    def _check_cancel_popup(self) -> bool:
+        """检测取消弹窗：'状态取消'或'取消'任一命中(中屏窄横条，排除右下角取消按钮)"""
+        arr = self._stream_frame()
+        if arr is None:
+            return False
+        h, w = arr.shape[:2]
+        crop = arr[640:min(h, 750), 450:min(w, 720), :]
+        try:
+            for r in self._get_reader().readtext(crop):
+                text = r[1]
+                if r[2] >= 0.1 and ("状态取消" in text or "取消" in text):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _cancel_auto_battle(self) -> bool:
+        """取消自动遇怪：确保非战斗 → 按0 → 确认'状态取消'弹窗，失败重试"""
+        for attempt in range(3):
+            if not self._running:
+                return False
+            if self._is_in_battle():
+                self.log_key("  [取消遇怪前] 检测到战斗，先等待结束...")
+                self._wait_battle_end()
+            self.log_key(f"  按键0 取消自动遇怪 (第{attempt + 1}次)")
+            self._ensure_stream_fresh()
+            self._touch(KEY0_ENTER, "数字键0取消遇怪", wait=0)
+            t0 = time.time()
+            while time.time() - t0 < 2.0 and self._running:
+                if self._check_cancel_popup():
+                    self.log_key("  已确认取消: '自动遇怪状态取消!'")
+                    return True
+                self._sleep(0.15)
+            self.log_key("  未检测到取消弹窗，重试...")
+        self.log_key("  [警告] 自动遇怪取消未确认成功")
+        return False
+
+    def _wait_battle_end(self, timeout: float = 300.0) -> bool:
+        """等待当前战斗结束（连续2次非战斗帧判定）"""
+        miss_count = 0
+        start = time.time()
+        while time.time() - start < timeout and self._running:
+            if not self._is_in_battle():
+                miss_count += 1
+                if miss_count >= 2:
+                    self.log_key("  战斗结束!")
+                    return True
+            else:
+                miss_count = 0
+            self._sleep(BATTLE_CHECK_INTERVAL)
+        self.log("  战斗超时或已停止")
+        return False
+
     def _wait_battle(self, timeout: float = 300.0):
         self.log("  等待进入战斗...")
         start = time.time()
@@ -276,20 +333,20 @@ class ChumoTask(BaseTask):
             self._sleep(BATTLE_CHECK_INTERVAL)
 
         self.log("  战斗中...")
-        miss_count = 0
-        while time.time() - start < timeout and self._running:
-            if not self._is_in_battle():
-                miss_count += 1
-                if miss_count >= 2:
-                    self.log_key("  战斗结束!")
-                    if move_triggered:
-                        self.log("  按键0取消自动遇怪")
-                        self._touch(KEY0_ENTER, "数字键0取消遇怪")
-                    return
-            else:
-                miss_count = 0
-            self._sleep(BATTLE_CHECK_INTERVAL)
-        self.log("  战斗超时或已停止")
+        self._wait_battle_end(timeout)
+
+        if move_triggered:
+            self._cancel_auto_battle()
+            # 取消后：角色可能已锁定下一只怪，最多等2场残留战斗结束（不再按0）
+            for i in range(2):
+                if not self._running:
+                    break
+                self._sleep(2.0)
+                if self._is_in_battle():
+                    self.log_key(f"  残留战斗(第{i + 1}场)，等待结束...")
+                    self._wait_battle_end()
+                else:
+                    break
 
     # ── 流程步骤 ────────────────────────────────
 

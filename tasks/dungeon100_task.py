@@ -190,12 +190,15 @@ class Dungeon100Task(BaseTask):
         self.log_key(f"  检测到战斗! 等待结束... (第{self._battle_count + 1}场)")
         miss = 0
         t0 = time.time()
+        # Boss战有出场动画/大招转场，_is_in_battle()会短暂False；普通战斗转场短，保持原阈值
+        miss_need = 10 if is_boss else 2       # Boss战需连续约3s未检测到战斗才判结束
+        min_battle = 10.0 if is_boss else 3.0  # Boss战最少打满10s(实测约49s)，过滤接任务后Boss未刷出的过渡期
         while self._running:
             if self._is_in_battle():
                 miss = 0
             else:
                 miss += 1
-                if miss >= 2 and time.time() - t0 >= 3.0:  # 最短3s，过滤开场过渡误判
+                if miss >= miss_need and time.time() - t0 >= min_battle:
                     if is_boss:
                         self.log_key("  Boss战结束!")
                     else:
@@ -604,6 +607,11 @@ class Dungeon100Task(BaseTask):
         self._ensure_not_in_battle("点击NPC")
         self._safe_touch((ROW_X, y))
         time.sleep(0.5)
+        # 再点一次该行，才弹出自动寻路菜单(第二行NPC第一次点击仅选中)
+        self._ensure_not_in_battle("点击NPC行")
+        self._safe_touch((ROW_X, y))
+        time.sleep(0.5)
+        self._ensure_not_in_battle("点击自动寻路")
         self._safe_touch(AUTO_PATHFIND)
         time.sleep(0.3)
         self.log("  自动寻路中(监测战斗)...")
@@ -733,6 +741,7 @@ class Dungeon100Task(BaseTask):
         self._tap(KEY1, "任务列表(1)", WAIT_PAGE)
         self._tap(STEP_CONFIRM, "确认", WAIT_PAGE)
         self._tap((500, 790), "瞬间传送", WAIT_TELEPORT)
+        self._handle_vip_teleport_popup()
         self.log_key("  传送完成")
         time.sleep(2.0)
         # 传送出副本后已在安全区，不再做战斗检测（阳谷UI的"自动"按钮会误触发_is_in_battle）

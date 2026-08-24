@@ -36,10 +36,12 @@ C_DIM       = "#7d8590"   # 次要文字（原 gray）
 C_WARN      = "#ffa657"   # 橙色（警告/连接中/上次进度）
 C_ERROR     = "#ff6b6b"   # 红色（错误）
 C_OK        = "#3fb950"   # 绿色（已连接/已开启）
-C_DONE_BG   = "#3d2e10"   # 今日任务·已打(黄底)
-C_DONE_FG   = "#ffd479"   # 今日任务·已打(黄字)
+C_DONE_BG   = "#3d2e10"   # 今日任务·部分(黄底)
+C_DONE_FG   = "#ffd479"   # 今日任务·部分(黄字)
 C_TODO_BG   = "#0f2f23"   # 今日任务·未打(绿底)
 C_TODO_FG   = "#4ade80"   # 今日任务·未打(绿字)
+C_FULL_BG   = "#3a1212"   # 今日任务·打满(红底)
+C_FULL_FG   = "#ff6b6b"   # 今日任务·打满(红字)
 C_STOP_BG   = "#b02418"   # 一键停止按钮(暗红)
 C_STOP_ACT  = "#7a1a12"   # 一键停止按钮(按下)
 
@@ -99,6 +101,12 @@ class App:
             "tie3": "铁3副本流程完成", "tie4": "铁4副本流程完成",
             "tower": "玄兵塔全部通关", "chumo": "仗剑除魔全部完成",
         }
+        self._today_max = {
+            "dungeon100": 3, "dungeon90": 3,
+            "tie1": 2, "tie2": 2, "tie3": 2, "tie4": 2,
+            "tower": 1, "chumo": 1,
+        }
+        self._today_names = dict(self._today_tasks)
         self._today_labels = {}   # tab_key -> tk.Label
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -140,6 +148,12 @@ class App:
         style.map("TCheckbutton", background=[("active", C_BG)])
         style.configure("TSpinbox", fieldbackground=C_BG_INPUT, background=C_BG_PANEL,
                         foreground=C_TEXT, arrowcolor=C_PRIMARY)
+        style.configure("Treeview", background=C_BG_PANEL, fieldbackground=C_BG_PANEL,
+                        foreground=C_TEXT, rowheight=26, borderwidth=0)
+        style.configure("Treeview.Heading", background=C_BG_INPUT, foreground=C_PRIMARY,
+                        font=(FONT_UI, 9, "bold"), borderwidth=0)
+        style.map("Treeview", background=[("selected", C_BG_INPUT)],
+                  foreground=[("selected", C_PRIMARY)])
 
         # 顶部区域：左侧横幅 + 右侧今日任务看板
         top_bar = ttk.Frame(self.root)
@@ -175,6 +189,9 @@ class App:
         tk.Button(btn_row, text="一键停止全部", command=self._stop_all, bg=C_STOP_BG, fg="#ffffff",
                   activebackground=C_STOP_ACT, activeforeground="#ffffff",
                   font=(FONT_UI, 10, "bold"), relief=tk.FLAT, bd=0, cursor="hand2").pack(side=tk.RIGHT, padx=4)
+        tk.Button(btn_row, text="一键重启", command=self._restart_ui, bg=C_WARN, fg="#1a1a1a",
+                  activebackground=C_ACCENT, activeforeground="#ffffff",
+                  font=(FONT_UI, 10, "bold"), relief=tk.FLAT, bd=0, cursor="hand2").pack(side=tk.RIGHT, padx=4)
         self._global_status_label = ttk.Label(btn_row, text="", foreground=C_DIM)
         self._global_status_label.pack(side=tk.LEFT, padx=8)
 
@@ -203,6 +220,7 @@ class App:
         self._build_smith_tab(notebook)
         self._build_monkey_tab(notebook)
         self._build_blood_tab(notebook)
+        self._build_account_resource_tab(notebook)
 
         # 右侧：日志
         right = ttk.Frame(body)
@@ -231,7 +249,7 @@ class App:
         self._today_summary_label = ttk.Label(header, text="", foreground=C_DIM)
         self._today_summary_label.pack(side=tk.LEFT, padx=8)
 
-        ttk.Label(panel, text="黄=已打  绿=未打  点击切换",
+        ttk.Label(panel, text="绿=未打 黄=部分 红=打满 · 左键+1 右键清零",
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
 
         grid = ttk.Frame(panel)
@@ -239,9 +257,10 @@ class App:
         for i, (key, name) in enumerate(self._today_tasks):
             lbl = tk.Label(grid, text=name, font=(FONT_UI, 10, "bold"),
                            fg=C_TODO_FG, bg=C_TODO_BG, padx=8, pady=6,
-                           width=8, relief=tk.FLAT, bd=0, cursor="hand2")
+                           width=11, relief=tk.FLAT, bd=0, cursor="hand2")
             lbl.grid(row=i // 4, column=i % 4, padx=3, pady=3)
-            lbl.bind("<Button-1>", lambda e, k=key: self._toggle_task_done(k))
+            lbl.bind("<Button-1>", lambda e, k=key: self._inc_task(k))
+            lbl.bind("<Button-3>", lambda e, k=key: self._reset_task(k))
             self._today_labels[key] = lbl
 
         self._refresh_today_tab()
@@ -259,15 +278,39 @@ class App:
     def _refresh_today_tab(self):
         today = time.strftime("%Y-%m-%d")
         data = self._load_today_record()
-        done_map = data.get(today, {})
+        count_map = data.get(today, {})
         for key, lbl in self._today_labels.items():
-            done = bool(done_map.get(key, False))
-            lbl.config(bg=C_DONE_BG if done else C_TODO_BG,
-                       fg=C_DONE_FG if done else C_TODO_FG)
-        done_count = sum(1 for k in self._today_labels if done_map.get(k, False))
+            cnt = self._as_count(count_map.get(key, 0))
+            maxn = self._today_max.get(key, 1)
+            if cnt >= maxn:
+                bg, fg = C_FULL_BG, C_FULL_FG
+            elif cnt > 0:
+                bg, fg = C_DONE_BG, C_DONE_FG
+            else:
+                bg, fg = C_TODO_BG, C_TODO_FG
+            lbl.config(text=f"{self._today_names.get(key, key)} {cnt}/{maxn}",
+                       bg=bg, fg=fg)
+        full_count = sum(1 for k in self._today_labels
+                         if self._as_count(count_map.get(k, 0)) >= self._today_max.get(k, 1))
         total = len(self._today_tasks)
         self._today_date_label.config(text=f"今日任务 ({today})")
-        self._today_summary_label.config(text=f"已完成 {done_count}/{total}")
+        self._today_summary_label.config(text=f"打满 {full_count}/{total}")
+
+    def _save_today_record(self, data):
+        try:
+            with open(self._today_record_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _as_count(v):
+        if isinstance(v, bool):
+            return 1 if v else 0
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
 
     def _mark_task_done(self, tab_key):
         if tab_key not in self._done_markers:
@@ -275,24 +318,24 @@ class App:
         today = time.strftime("%Y-%m-%d")
         data = self._load_today_record()
         data.setdefault(today, {})
-        data[today][tab_key] = True
-        try:
-            with open(self._today_record_path(), "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        data[today][tab_key] = self._as_count(data[today].get(tab_key, 0)) + 1
+        self._save_today_record(data)
         self._refresh_today_tab()
 
-    def _toggle_task_done(self, key, event=None):
+    def _inc_task(self, key, event=None):
         today = time.strftime("%Y-%m-%d")
         data = self._load_today_record()
         data.setdefault(today, {})
-        data[today][key] = not bool(data[today].get(key, False))
-        try:
-            with open(self._today_record_path(), "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        data[today][key] = self._as_count(data[today].get(key, 0)) + 1
+        self._save_today_record(data)
+        self._refresh_today_tab()
+
+    def _reset_task(self, key, event=None):
+        today = time.strftime("%Y-%m-%d")
+        data = self._load_today_record()
+        data.setdefault(today, {})
+        data[today][key] = 0
+        self._save_today_record(data)
         self._refresh_today_tab()
 
     # ── 设备选择辅助 ─────────────────────────────
@@ -423,6 +466,24 @@ class App:
         self._workers.clear()
         self._kill_ocr_service()
         self.root.destroy()
+
+    def _restart_ui(self):
+        """一键重启 UI 及服务：清理 worker/OCR → 拉起新实例 → 退出当前进程"""
+        for dev, w in list(self._workers.items()):
+            try:
+                w["proc"].kill()
+            except Exception:
+                pass
+        self._workers.clear()
+        self._kill_ocr_service()
+        try:
+            subprocess.Popen(
+                [sys.executable, os.path.join(BASE_DIR, "main.py")],
+                cwd=BASE_DIR)
+        except Exception as e:
+            self._log("重启失败: " + str(e))
+            return
+        os._exit(0)
 
     def _update_dev_row(self, tab_key: str, dev: str):
         w = self._tab_row_widgets.get(tab_key, {}).get(dev)
@@ -891,6 +952,11 @@ class App:
         ttk.Label(tab, text=help_text, foreground=C_DIM,
                   justify=tk.LEFT).pack(anchor=tk.W, pady=4)
 
+        ttk.Label(tab, text="每步间隔(秒):").pack(anchor=tk.W)
+        self._smith_step_var = tk.DoubleVar(value=0.5)
+        ttk.Spinbox(tab, from_=0.1, to=5, increment=0.1,
+                    textvariable=self._smith_step_var, width=5).pack(anchor=tk.W, pady=2)
+
         ttk.Label(tab, text="每轮间隔(秒):").pack(anchor=tk.W)
         self._smith_interval_var = tk.DoubleVar(value=1.2)
         ttk.Spinbox(tab, from_=0.5, to=10, increment=0.1,
@@ -1097,6 +1163,232 @@ class App:
         if w:
             total = {"dungeon100": 9, "dungeon90": 12, "tie1": 13, "tie2": 10, "tie3": 15, "tie4": 14}.get(tab_key, 9)
             w["status"].set(f"运行中 Phase {phase}/{total}")
+
+    # ── 账号资源记录 ─────────────────────────────
+
+    def _account_resource_path(self):
+        return os.path.join(BASE_DIR, "logs", "account_resource_record.json")
+
+    def _load_account_resources(self):
+        try:
+            with open(self._account_resource_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+        return []
+
+    def _save_account_resources(self, records):
+        try:
+            with open(self._account_resource_path(), "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _ar_refresh_table(self):
+        self._ar_records = self._load_account_resources()
+        accounts = sorted({str(r.get("account", "")) for r in self._ar_records if r.get("account")})
+        resources = sorted({str(r.get("resource", "")) for r in self._ar_records if r.get("resource")})
+        self._ar_account_box["values"] = ["全部"] + accounts
+        self._ar_resource_box["values"] = ["全部"] + resources
+        self._ar_account_input["values"] = accounts
+        self._ar_resource_input["values"] = resources
+        fa = self._ar_filter_account_var.get().strip()
+        fr = self._ar_filter_resource_var.get().strip()
+        self._ar_tree.delete(*self._ar_tree.get_children())
+        for idx, r in enumerate(self._ar_records):
+            account = str(r.get("account", ""))
+            resource = str(r.get("resource", ""))
+            if fa and fa != "全部" and fa != account:
+                continue
+            if fr and fr != "全部" and fr != resource:
+                continue
+            mark = "☑" if idx in self._ar_checked else "☐"
+            self._ar_tree.insert("", "end", iid=str(idx), values=(
+                mark, account, resource,
+                r.get("count", ""), r.get("updated", "")))
+
+    def _ar_add(self):
+        account = self._ar_account_var.get().strip()
+        resource = self._ar_resource_var.get().strip()
+        count = self._ar_count_var.get().strip()
+        if not account or not resource:
+            self._log("[账号资源] 账号名和资源名不能为空")
+            return
+        updated = time.strftime("%Y-%m-%d %H:%M:%S")
+        records = self._load_account_resources()
+        records.append({"account": account, "resource": resource,
+                        "count": count, "updated": updated})
+        self._save_account_resources(records)
+        self._ar_refresh_table()
+        self._ar_count_var.set("")
+
+    def _ar_delete_checked(self):
+        if not self._ar_checked:
+            self._log("[账号资源] 请先勾选要删除的行")
+            return
+        records = [r for i, r in enumerate(self._load_account_resources())
+                   if i not in self._ar_checked]
+        self._save_account_resources(records)
+        self._ar_checked.clear()
+        self._ar_refresh_table()
+
+    def _ar_batch_set_count(self):
+        if not self._ar_checked:
+            self._log("[账号资源] 请先勾选要修改的行")
+            return
+        val = self._ar_count_batch_var.get().strip()
+        updated = time.strftime("%Y-%m-%d %H:%M:%S")
+        records = self._load_account_resources()
+        for i, r in enumerate(records):
+            if i in self._ar_checked:
+                r["count"] = val
+                r["updated"] = updated
+        self._save_account_resources(records)
+        self._ar_refresh_table()
+        self._ar_count_batch_var.set("")
+
+    def _ar_on_click(self, event):
+        tree = self._ar_tree
+        if tree.identify_column(event.x) != "#1":
+            return
+        iid = tree.identify_row(event.y)
+        if not iid:
+            return
+        try:
+            idx = int(iid)
+        except ValueError:
+            return
+        if idx in self._ar_checked:
+            self._ar_checked.discard(idx)
+        else:
+            self._ar_checked.add(idx)
+        tree.set(iid, "sel", "☑" if idx in self._ar_checked else "☐")
+
+    def _ar_clear_filter(self):
+        self._ar_filter_account_var.set("全部")
+        self._ar_filter_resource_var.set("全部")
+
+    def _ar_on_double_click(self, event):
+        tree = self._ar_tree
+        iid = tree.identify_row(event.y)
+        col = tree.identify_column(event.x)
+        if not iid or not col.startswith("#"):
+            return
+        col_index = int(col[1:]) - 1
+        if col_index < 0 or col_index >= len(self._ar_cols) or col_index == 0:
+            return
+        bbox = tree.bbox(iid, column=col)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        current = tree.item(iid, "values")[col_index]
+        entry = tk.Entry(tree)
+        entry.insert(0, str(current))
+        entry.select_range(0, tk.END)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.focus_set()
+
+        def commit(_event=None):
+            val = entry.get().strip()
+            entry.destroy()
+            self._ar_commit_edit(iid, col_index, val)
+
+        def cancel(_event=None):
+            entry.destroy()
+
+        entry.bind("<Return>", commit)
+        entry.bind("<Escape>", cancel)
+        entry.bind("<FocusOut>", commit)
+
+    def _ar_commit_edit(self, iid, col_index, new_val):
+        try:
+            idx = int(iid)
+        except (TypeError, ValueError):
+            return
+        if idx < 0 or idx >= len(self._ar_records):
+            return
+        col = self._ar_cols[col_index]
+        r = self._ar_records[idx]
+        if col == "updated":
+            r["updated"] = new_val
+        else:
+            r[col] = new_val
+            if col in ("account", "resource", "count"):
+                r["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        self._save_account_resources(self._ar_records)
+        self._ar_refresh_table()
+
+    def _build_account_resource_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="账号资源记录")
+        self._ar_checked = set()
+
+        ttk.Label(tab, text="手动填写。点击最左列勾选；双击单元格可编辑(回车保存)；账号/资源下拉框自动带出已有名字。",
+                  foreground=C_DIM).pack(anchor=tk.W, pady=(0, 6))
+
+        entry_row = ttk.Frame(tab)
+        entry_row.pack(fill=tk.X, pady=(0, 6))
+        self._ar_account_var = tk.StringVar()
+        self._ar_resource_var = tk.StringVar()
+        self._ar_count_var = tk.StringVar()
+        ttk.Label(entry_row, text="添加:", foreground=C_ACCENT).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(entry_row, text="账号名:").pack(side=tk.LEFT)
+        self._ar_account_input = ttk.Combobox(entry_row, textvariable=self._ar_account_var, width=12)
+        self._ar_account_input.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(entry_row, text="资源名:").pack(side=tk.LEFT)
+        self._ar_resource_input = ttk.Combobox(entry_row, textvariable=self._ar_resource_var, width=12)
+        self._ar_resource_input.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(entry_row, text="数量:").pack(side=tk.LEFT)
+        ttk.Entry(entry_row, textvariable=self._ar_count_var, width=12).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(entry_row, text="添加", command=self._ar_add).pack(side=tk.LEFT, padx=4)
+
+        batch_row = ttk.Frame(tab)
+        batch_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(batch_row, text="修改:", foreground=C_ACCENT).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(batch_row, text="删除勾选", command=self._ar_delete_checked).pack(side=tk.LEFT)
+        ttk.Label(batch_row, text="批量改数量:").pack(side=tk.LEFT, padx=(12, 0))
+        self._ar_count_batch_var = tk.StringVar()
+        ttk.Entry(batch_row, textvariable=self._ar_count_batch_var, width=12).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(batch_row, text="应用", command=self._ar_batch_set_count).pack(side=tk.LEFT, padx=4)
+
+        filter_row = ttk.Frame(tab)
+        filter_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(filter_row, text="筛选:", foreground=C_ACCENT).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(filter_row, text="账号:").pack(side=tk.LEFT)
+        self._ar_filter_account_var = tk.StringVar(value="全部")
+        self._ar_account_box = ttk.Combobox(filter_row, textvariable=self._ar_filter_account_var,
+                                            state="readonly", width=14)
+        self._ar_account_box.pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(filter_row, text="资源:").pack(side=tk.LEFT)
+        self._ar_filter_resource_var = tk.StringVar(value="全部")
+        self._ar_resource_box = ttk.Combobox(filter_row, textvariable=self._ar_filter_resource_var,
+                                             state="readonly", width=14)
+        self._ar_resource_box.pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Button(filter_row, text="清除", command=self._ar_clear_filter).pack(side=tk.LEFT)
+
+        self._ar_filter_account_var.trace_add("write", lambda *a: self._ar_refresh_table())
+        self._ar_filter_resource_var.trace_add("write", lambda *a: self._ar_refresh_table())
+
+        tree_frame = ttk.Frame(tab)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        self._ar_cols = ("sel", "account", "resource", "count", "updated")
+        self._ar_tree = ttk.Treeview(tree_frame, columns=self._ar_cols, show="headings")
+        for cid, title, w in (("sel", "选", 40), ("account", "账号名字", 150),
+                              ("resource", "资源名字", 150), ("count", "资源数量", 110),
+                              ("updated", "更新时间", 170)):
+            self._ar_tree.heading(cid, text=title)
+            self._ar_tree.column(cid, width=w, anchor=tk.CENTER)
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self._ar_tree.yview)
+        self._ar_tree.configure(yscrollcommand=vsb.set)
+        self._ar_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._ar_tree.bind("<Double-1>", self._ar_on_double_click)
+        self._ar_tree.bind("<Button-1>", self._ar_on_click)
+
+        self._ar_refresh_table()
 
     # ── 90副本 ─────────────────────────────────────
 
@@ -1328,7 +1620,10 @@ class App:
         if dev in self._workers:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
-        spec = {"task_type": "smith", "params": {"interval": self._smith_interval_var.get()}}
+        spec = {"task_type": "smith", "params": {
+            "interval": self._smith_interval_var.get(),
+            "step": self._smith_step_var.get(),
+        }}
         self._start_worker("smith", dev, spec)
 
     # ── 打泼猴 ─────────────────────────────────────

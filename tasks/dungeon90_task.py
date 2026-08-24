@@ -161,13 +161,15 @@ class Dungeon90Task(BaseTask):
     def _wait_battle_end(self, is_boss: bool = False):
         miss = 0
         t0 = time.time()
+        miss_need = 10 if is_boss else 2       # Boss战转场动画会短暂False，需更多次连续未检测才判结束
+        min_battle = 10.0 if is_boss else 3.0  # Boss战最少打满10s，过滤Boss未刷出的过渡期
         while self._running and time.time() - t0 < 60:
             time.sleep(0.3)
             if self._is_in_battle():
                 miss = 0
             else:
                 miss += 1
-                if miss >= 2 and time.time() - t0 >= 3.0:  # 最短3s，过滤开场过渡误判
+                if miss >= miss_need and time.time() - t0 >= min_battle:
                     break
         if not self._running:
             return
@@ -288,6 +290,29 @@ class Dungeon90Task(BaseTask):
                     self.log_key(f"  第{i + 1}次后 地图: '{name}' [地图已变!]")
                     return True
             self.log_key(f"  第{i + 1}次后 地图: '{name}'")
+        return False
+
+    def _walk_fast(self, desc, pos, target_check, times=10, interval=1.0):
+        """连续点击+检测：每 interval 秒点一次，期间不断检测地图名，命中即停"""
+        self.log_key(f"── {desc} 点 {times} 次(间隔{interval}s) ──")
+        last_click = -1e9
+        clicks = 0
+        while clicks < times and self._running:
+            if self._is_in_battle():
+                self.log_key("  遇怪! 等待战斗结束...")
+                self._wait_battle_end()
+                last_click = time.time()
+                continue
+            name = self._get_map_name()
+            if target_check(name):
+                self.log_key(f"  地图已变: '{name}'")
+                return True
+            if time.time() - last_click >= interval:
+                self._safe_touch(pos)
+                clicks += 1
+                last_click = time.time()
+                self.log_key(f"  点击 {clicks}/{times} 后地图: '{name}'")
+            time.sleep(0.3)
         return False
 
     # ── 自动遇怪 ────────────────────────────────
@@ -719,8 +744,8 @@ class Dungeon90Task(BaseTask):
             self._log_phase(8, "进禁忌古道→遇怪2次→回灵隐")
             self._safe_touch(PORTAL_50); time.sleep(3.0)
             self._auto_battle_phase(2)
-            if not self._walk_phase("右下角", RIGHT_DOWN, lambda n: "灵隐" in n):
-                self._walk_phase("右上角", RIGHT_UP, lambda n: "灵隐" in n)
+            if not self._walk_fast("右下角", RIGHT_DOWN, lambda n: "灵隐" in n, times=10):
+                self._walk_fast("右上角", RIGHT_UP, lambda n: "灵隐" in n, times=10)
             self._save_progress(8)
 
         # Phase 9: 灵隐绝境 找瑞南羽 → 交 → 接

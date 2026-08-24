@@ -6,7 +6,7 @@ from tasks.base_task import BaseTask
 class SmithTask(BaseTask):
     """重复与名匠NPC对话，兑换石磨"""
 
-    WAIT_CLICK = 0.3
+    WAIT_CLICK = 0.5
     WAIT_ROUND = 1.2
 
     STEPS = [

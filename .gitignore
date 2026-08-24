@@ -40,4 +40,3 @@ frida-server
 tools/frida-server-*
 *.apk
 _pagefile*
-_set_pagefile.ps1

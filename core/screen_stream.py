@@ -25,6 +25,8 @@ from PIL import Image
 
 MUMU_ADB = r"D:/Setup_and_Downloads/Setup/MuMuPlayer/nx_main/adb.exe"
 SCRCPY_SERVER = r"D:/Setup_and_Downloads/Setup/op/scrcpy-server"
+SCRCPY_SERVER_REMOTE = "/oem/scrcpy-server.jar"  # MuMu12 部分实例 /data 被挂为只读(如16416), jar 放可写的 /oem
+SCRCPY_LOG_REMOTE = "/oem/scrcpy.log"
 FFMPEG = r"D:/Setup_and_Downloads/Setup/FormatFactory/ffmpeg.exe"
 
 _PORT_BASE = 27100
@@ -168,14 +170,14 @@ class ScreenStream:
         try:
             local_size = os.path.getsize(SCRCPY_SERVER)
             r = self._adb("shell", "stat", "-c", "%s",
-                          "/data/local/tmp/scrcpy-server.jar", timeout=6)
+                          SCRCPY_SERVER_REMOTE, timeout=6)
             if r.stdout.strip().isdigit() and int(r.stdout.strip()) == local_size:
                 self._jar_ready = True
                 return True
         except Exception:
             pass
         try:
-            self._adb("push", SCRCPY_SERVER, "/data/local/tmp/scrcpy-server.jar", timeout=15)
+            self._adb("push", SCRCPY_SERVER, SCRCPY_SERVER_REMOTE, timeout=15)
             self._jar_ready = True
             return True
         except Exception:
@@ -213,16 +215,16 @@ class ScreenStream:
 
     def _launch_server(self):
         """启动 server 进程 + 握手 + 拉起解码线程（复用已就位的 jar/forward/display）"""
-        server_cmd = ("CLASSPATH=/data/local/tmp/scrcpy-server.jar "
+        server_cmd = ("CLASSPATH=%s "
                       "app_process / com.genymobile.scrcpy.Server 2.4 "
                       "log_level=info max_size=0 max_fps=%d video_codec=h264 "
                       "tunnel_forward=true control=false audio=false "
-                      "lock_video_orientation=0" % self.max_fps)
+                      "lock_video_orientation=0" % (SCRCPY_SERVER_REMOTE, self.max_fps))
         if self._display_id and self._display_id != 0:
             server_cmd += " display_id=%d" % self._display_id
         # setsid 脱离 adb shell 进程组：MuMu 回收 shell 会话时不会连带 SIGKILL server
         full_cmd = ("setsid nohup sh -c '%s' "
-                    ">/data/local/tmp/scrcpy.log 2>&1 &" % server_cmd)
+                    ">%s 2>&1 &" % (server_cmd, SCRCPY_LOG_REMOTE))
         try:
             self._adb("shell", full_cmd, timeout=5)
         except Exception:

@@ -60,6 +60,7 @@ def build_task(spec: dict):
         from tasks.smith_task import SmithTask
         task = SmithTask()
         task.WAIT_ROUND = p.get("interval", 1.2)
+        task.WAIT_CLICK = p.get("step", 0.5)
         return task
     if t == "monkey":
         from tasks.monkey_task import MonkeyTask

@@ -174,13 +174,15 @@ class DungeonTie3Task(BaseTask):
         self.log_key(f"  检测到战斗! 等待结束... (第{self._battle_count + 1}场)")
         miss = 0
         t0 = time.time()
+        miss_need = 10 if is_boss else 2       # Boss战转场动画会短暂False，需更多次连续未检测才判结束
+        min_battle = 10.0 if is_boss else 3.0  # Boss战最少打满10s，过滤Boss未刷出的过渡期
         while self._running and time.time() - t0 < (300 if is_boss else 60):
             time.sleep(0.3)
             if self._is_in_battle():
                 miss = 0
             else:
                 miss += 1
-                if miss >= 2 and time.time() - t0 >= 3.0:  # 最短3s，过滤开场过渡误判
+                if miss >= miss_need and time.time() - t0 >= min_battle:
                     break
         if not self._running:
             return
@@ -656,6 +658,7 @@ class DungeonTie3Task(BaseTask):
         self._safe_touch((cx, row_y)); time.sleep(0.8)
         self._tap(STEP_CONFIRM, "确定", 0.8)
         self._tap(TELEPORT, "瞬间传送", 3.0)
+        self._handle_vip_teleport_popup()
         self._sleep(2.0)
         self.log_key("  传送完成")
         return True
