@@ -79,6 +79,7 @@ class App:
         self._tab_handlers = {}       # tab_key -> callable(dev)
         self._tab_devices = {}        # tab_key -> list[device_name] (当前运行)
         self._tab_widgets = {}        # tab_key -> tab frame (用于运行标记)
+        self._tab_loop_vars = {}      # tab_key -> tk.StringVar (循环次数)
         self._notebook = None         # 标签页容器
         self._blood_monitors = {}  # name -> BloodMonitor
         self._blood_widgets = {}  # name -> (frame, status_label, btn)
@@ -88,6 +89,7 @@ class App:
         self._tie2_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 11)]
         self._tie3_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 16)]
         self._tie4_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 15)]
+        self._tianyuan_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 6)]
         # 今日任务记录（全局合并，按日期）
         self._today_tasks = [
             ("dungeon100", "100副本"), ("dungeon90", "90副本"),
@@ -104,7 +106,7 @@ class App:
         self._today_max = {
             "dungeon100": 3, "dungeon90": 3,
             "tie1": 2, "tie2": 2, "tie3": 2, "tie4": 2,
-            "tower": 1, "chumo": 1,
+            "tower": 3, "chumo": 1,
         }
         self._today_names = dict(self._today_tasks)
         self._today_labels = {}   # tab_key -> tk.Label
@@ -213,6 +215,7 @@ class App:
         self._build_tie2_tab(notebook)
         self._build_tie3_tab(notebook)
         self._build_tie4_tab(notebook)
+        self._build_tianyuan_tab(notebook)
         self._build_crystal_tab(notebook)
         self._build_pet_tab(notebook)
         self._build_tower_tab(notebook)
@@ -387,6 +390,7 @@ class App:
                     "tie2": (self._tie2_last_phase, self._tie2_start_options),
                     "tie3": (self._tie3_last_phase, self._tie3_start_options),
                     "tie4": (self._tie4_last_phase, self._tie4_start_options),
+                    "tianyuan": (self._tianyuan_last_phase, self._tianyuan_start_options),
                 }.get(tab_key)
                 if phase_tab:
                     last_fn, options = phase_tab
@@ -404,6 +408,15 @@ class App:
         handler = self._tab_handlers.get(tab_key)
         if handler:
             handler(dev)
+
+    def _loop_from_var(self, tab_key: str) -> int:
+        var = self._tab_loop_vars.get(tab_key)
+        if not var:
+            return 1
+        try:
+            return max(1, int(var.get().replace("次", "")))
+        except Exception:
+            return 1
 
     def _stop_dev(self, tab_key: str, dev: str):
         w = self._workers.get(dev)
@@ -641,6 +654,13 @@ class App:
 
         self._build_device_select(tab, "dungeon90", self._on_start_dungeon90)
 
+        loop_row = ttk.Frame(tab)
+        loop_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(loop_row, text="循环次数:").pack(side=tk.LEFT)
+        self._tab_loop_vars["dungeon90"] = tk.StringVar(value="1次")
+        ttk.Combobox(loop_row, textvariable=self._tab_loop_vars["dungeon90"],
+                     values=["1次", "2次", "3次"], state="readonly", width=8).pack(side=tk.LEFT, padx=6)
+
         ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
 
@@ -672,6 +692,13 @@ class App:
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "dungeon100", self._on_start_dungeon100)
 
+        loop_row = ttk.Frame(tab)
+        loop_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(loop_row, text="循环次数:").pack(side=tk.LEFT)
+        self._tab_loop_vars["dungeon100"] = tk.StringVar(value="1次")
+        ttk.Combobox(loop_row, textvariable=self._tab_loop_vars["dungeon100"],
+                     values=["1次", "2次", "3次"], state="readonly", width=8).pack(side=tk.LEFT, padx=6)
+
         ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
 
@@ -700,6 +727,13 @@ class App:
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie1", self._on_start_tie1)
+
+        loop_row = ttk.Frame(tab)
+        loop_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(loop_row, text="循环次数:").pack(side=tk.LEFT)
+        self._tab_loop_vars["tie1"] = tk.StringVar(value="1次")
+        ttk.Combobox(loop_row, textvariable=self._tab_loop_vars["tie1"],
+                     values=["1次", "2次", "3次"], state="readonly", width=8).pack(side=tk.LEFT, padx=6)
 
         ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
@@ -733,6 +767,13 @@ class App:
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie2", self._on_start_tie2)
 
+        loop_row = ttk.Frame(tab)
+        loop_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(loop_row, text="循环次数:").pack(side=tk.LEFT)
+        self._tab_loop_vars["tie2"] = tk.StringVar(value="1次")
+        ttk.Combobox(loop_row, textvariable=self._tab_loop_vars["tie2"],
+                     values=["1次", "2次", "3次"], state="readonly", width=8).pack(side=tk.LEFT, padx=6)
+
         ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
 
@@ -761,6 +802,13 @@ class App:
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie3", self._on_start_tie3)
+
+        loop_row = ttk.Frame(tab)
+        loop_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(loop_row, text="循环次数:").pack(side=tk.LEFT)
+        self._tab_loop_vars["tie3"] = tk.StringVar(value="1次")
+        ttk.Combobox(loop_row, textvariable=self._tab_loop_vars["tie3"],
+                     values=["1次", "2次", "3次"], state="readonly", width=8).pack(side=tk.LEFT, padx=6)
 
         ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
@@ -796,6 +844,13 @@ class App:
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie4", self._on_start_tie4)
 
+        loop_row = ttk.Frame(tab)
+        loop_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(loop_row, text="循环次数:").pack(side=tk.LEFT)
+        self._tab_loop_vars["tie4"] = tk.StringVar(value="1次")
+        ttk.Combobox(loop_row, textvariable=self._tab_loop_vars["tie4"],
+                     values=["1次", "2次", "3次"], state="readonly", width=8).pack(side=tk.LEFT, padx=6)
+
         ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
                   foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
 
@@ -815,6 +870,39 @@ class App:
             "Phase 12: 炼魂祭坛 补1场战斗\n"
             "Phase 13: 炼魂祭坛 找天星子→交\n"
             "Phase 14: 接新任务→Boss战→交任务\n"
+            "坐标基于1080x1920"
+        )
+        ttk.Label(tab, text=help_text, foreground=C_DIM,
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
+    # ── 天渊40页 ─────────────────────────────────
+
+    def _build_tianyuan_tab(self, notebook):
+        tab = ttk.Frame(notebook, padding=8)
+        notebook.add(tab, text="天渊40")
+
+        # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
+        self._build_device_select(tab, "tianyuan", self._on_start_tianyuan)
+
+        loop_row = ttk.Frame(tab)
+        loop_row.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(loop_row, text="层数:").pack(side=tk.LEFT)
+        self._tab_loop_vars["tianyuan"] = tk.StringVar(value="40")
+        ttk.Spinbox(loop_row, from_=1, to=40, textvariable=self._tab_loop_vars["tianyuan"],
+                    width=6).pack(side=tk.LEFT, padx=6)
+        ttk.Label(loop_row, text="层 (1~40，每层循环执行下方 6 个 Phase)",
+                  foreground=C_DIM).pack(side=tk.LEFT)
+
+        ttk.Label(tab, text="每台设备行可独立选择起始阶段；\"自动续跑\"会从该设备上次完成的 Phase 之后继续",
+                  foreground=C_DIM).pack(anchor=tk.W, pady=(0, 4))
+
+        help_text = (
+            "Phase 0: 找天渊使者→寻路(去接)\n"
+            "Phase 1: 接任务\n"
+            "Phase 2: 自动遇怪打1场\n"
+            "Phase 3: 找天渊使者→寻路(去交)\n"
+            "Phase 4: 交任务\n"
+            "Phase 5: 去下一层(最后一层自动跳过)\n"
             "坐标基于1080x1920"
         )
         ttk.Label(tab, text=help_text, foreground=C_DIM,
@@ -1161,7 +1249,7 @@ class App:
     def _set_dev_phase(self, tab_key: str, dev: str, phase: int):
         w = self._tab_row_widgets.get(tab_key, {}).get(dev)
         if w:
-            total = {"dungeon100": 9, "dungeon90": 12, "tie1": 13, "tie2": 10, "tie3": 15, "tie4": 14}.get(tab_key, 9)
+            total = {"dungeon100": 9, "dungeon90": 12, "tie1": 13, "tie2": 10, "tie3": 15, "tie4": 14, "tianyuan": 6}.get(tab_key, 9)
             w["status"].set(f"运行中 Phase {phase}/{total}")
 
     # ── 账号资源记录 ─────────────────────────────
@@ -1397,7 +1485,8 @@ class App:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
         spec = {"task_type": "dungeon90",
-                "params": {"start_phase": self._dungeon90_start_phase(dev)}}
+                "params": {"start_phase": self._dungeon90_start_phase(dev),
+                           "loop": self._loop_from_var("dungeon90")}}
         self._start_worker("dungeon90", dev, spec)
 
     def _dungeon90_start_phase(self, dev):
@@ -1429,7 +1518,8 @@ class App:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
         spec = {"task_type": "dungeon100",
-                "params": {"start_phase": self._dungeon100_start_phase(dev)}}
+                "params": {"start_phase": self._dungeon100_start_phase(dev),
+                           "loop": self._loop_from_var("dungeon100")}}
         self._start_worker("dungeon100", dev, spec)
 
     def _dungeon100_start_phase(self, dev):
@@ -1461,7 +1551,8 @@ class App:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
         spec = {"task_type": "tie1",
-                "params": {"start_phase": self._tie1_start_phase(dev)}}
+                "params": {"start_phase": self._tie1_start_phase(dev),
+                           "loop": self._loop_from_var("tie1")}}
         self._start_worker("tie1", dev, spec)
 
     def _tie1_start_phase(self, dev):
@@ -1493,7 +1584,8 @@ class App:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
         spec = {"task_type": "tie2",
-                "params": {"start_phase": self._tie2_start_phase(dev)}}
+                "params": {"start_phase": self._tie2_start_phase(dev),
+                           "loop": self._loop_from_var("tie2")}}
         self._start_worker("tie2", dev, spec)
 
     def _tie2_start_phase(self, dev):
@@ -1525,7 +1617,8 @@ class App:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
         spec = {"task_type": "tie3",
-                "params": {"start_phase": self._tie3_start_phase(dev)}}
+                "params": {"start_phase": self._tie3_start_phase(dev),
+                           "loop": self._loop_from_var("tie3")}}
         self._start_worker("tie3", dev, spec)
 
     def _tie3_start_phase(self, dev):
@@ -1557,7 +1650,8 @@ class App:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
         spec = {"task_type": "tie4",
-                "params": {"start_phase": self._tie4_start_phase(dev)}}
+                "params": {"start_phase": self._tie4_start_phase(dev),
+                           "loop": self._loop_from_var("tie4")}}
         self._start_worker("tie4", dev, spec)
 
     def _tie4_start_phase(self, dev):
@@ -1576,6 +1670,39 @@ class App:
         serial = self._device_serial.get(dev, "")
         safe = serial.replace(":", "_").replace("/", "_") if serial else "default"
         path = os.path.join(BASE_DIR, "logs", f"dungeon_tie4_state_{safe}.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return int(json.load(f).get("last_done_phase", -1))
+        except Exception:
+            return -1
+
+    # ── 天渊40 ─────────────────────────────────────
+
+    def _on_start_tianyuan(self, dev):
+        if dev in self._workers:
+            self._log(f"[{dev}] 已有任务在运行，跳过")
+            return
+        spec = {"task_type": "tianyuan",
+                "params": {"start_phase": self._tianyuan_start_phase(dev),
+                           "loop": self._loop_from_var("tianyuan")}}
+        self._start_worker("tianyuan", dev, spec)
+
+    def _tianyuan_start_phase(self, dev):
+        w = self._tab_row_widgets.get("tianyuan", {}).get(dev, {})
+        val = w.get("start_var", tk.StringVar(value="自动续跑")).get()
+        if val == "从头开始 (Phase 0)":
+            return 0
+        if val.startswith("Phase "):
+            try:
+                return int(val.split()[-1])
+            except Exception:
+                return None
+        return None  # 自动续跑
+
+    def _tianyuan_last_phase(self, dev):
+        serial = self._device_serial.get(dev, "")
+        safe = serial.replace(":", "_").replace("/", "_") if serial else "default"
+        path = os.path.join(BASE_DIR, "logs", f"tianyuan_state_{safe}.json")
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return int(json.load(f).get("last_done_phase", -1))

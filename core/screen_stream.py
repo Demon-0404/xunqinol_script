@@ -25,8 +25,7 @@ from PIL import Image
 
 MUMU_ADB = r"D:/Setup_and_Downloads/Setup/MuMuPlayer/nx_main/adb.exe"
 SCRCPY_SERVER = r"D:/Setup_and_Downloads/Setup/op/scrcpy-server"
-SCRCPY_SERVER_REMOTE = "/oem/scrcpy-server.jar"  # MuMu12 部分实例 /data 被挂为只读(如16416), jar 放可写的 /oem
-SCRCPY_LOG_REMOTE = "/oem/scrcpy.log"
+SCRCPY_SERVER_REMOTE = "/data/local/tmp/scrcpy-server.jar"  # /oem 的 jar 无法被 app_process classloader 加载(unknown path→ClassNotFound→Aborted)，必须放 /data/local/tmp
 FFMPEG = r"D:/Setup_and_Downloads/Setup/FormatFactory/ffmpeg.exe"
 
 _PORT_BASE = 27100
@@ -93,7 +92,6 @@ class ScreenStream:
         self._gen = 0               # 每次 start() 自增，隔离旧线程的 _mark_dead
         self._last_start_ts = 0.0
         self._display_id = None     # 缓存探测到的 display id，重启复用
-        self._jar_ready = False     # scrcpy-server.jar 是否已 push，重启复用
 
     # ── 生命周期 ────────────────────────────────
 
@@ -134,9 +132,19 @@ class ScreenStream:
             return (-1.0, 0, 0)
 
     def _detect_display_id(self) -> int:
-        """自动探测游戏所在 display。
-        1) 优先按游戏包名 proj.xqj 定位(dumpsys SurfaceFlinger);
-        2) 回退: 竖屏(高>宽)display 优先再取最亮(桌面横屏更亮也不抢)。"""
+        """探测游戏所在 display：竖屏(高>宽)且最亮 = 游戏主画面。
+        SurfaceFlinger 文本匹配会把游戏窗口误判到 HDMI(横屏) display，故竖屏优先。"""
+        best, best_val = 0, -1.0
+        # 1) 竖屏优先：游戏是竖屏 1080x1920，桌面/HDMI 是横屏，黑屏亮度≈0 不会抢
+        for did in (0, 1, 2, 3):
+            v, w, h = self._screencap_display(did)
+            if v < 0:
+                continue
+            if h > w and v > best_val:
+                best, best_val = did, v
+        if best_val >= 0:
+            return best
+        # 2) 回退：无竖屏(横屏游戏)时按包名定位
         try:
             r = self._adb("shell", "dumpsys", "SurfaceFlinger", "--list", timeout=8)
             cur = -1
@@ -148,44 +156,44 @@ class ScreenStream:
                     return cur
         except Exception:
             pass
-
-        best, best_val = 0, -1.0
+        # 3) 最后回退：取最亮 display
         for did in (0, 1, 2, 3):
             v, w, h = self._screencap_display(did)
-            if v < 0:
-                continue
-            if h > w and v > best_val:   # 竖屏 = 游戏
+            if v > best_val:
                 best, best_val = did, v
-        if best_val < 0:
-            for did in (0, 1, 2, 3):
-                v, w, h = self._screencap_display(did)
-                if v > best_val:
-                    best, best_val = did, v
         return best
 
     def _ensure_jar(self) -> bool:
-        """确保 scrcpy-server.jar 已就位。已 push 过则跳过（push 是重启主要耗时）"""
-        if self._jar_ready:
-            return True
+        """确保 scrcpy-server.jar 已就位。每次 stat 验证（stat 快、push 慢）；
+        jar 缺失/大小不符才 push，不用缓存跳过（缓存会在 jar 被删后误判已就位）。"""
         try:
             local_size = os.path.getsize(SCRCPY_SERVER)
             r = self._adb("shell", "stat", "-c", "%s",
                           SCRCPY_SERVER_REMOTE, timeout=6)
-            if r.stdout.strip().isdigit() and int(r.stdout.strip()) == local_size:
-                self._jar_ready = True
+            if r.returncode == 0 and r.stdout.strip().isdigit() and int(r.stdout.strip()) == local_size:
                 return True
         except Exception:
             pass
-        try:
-            self._adb("push", SCRCPY_SERVER, SCRCPY_SERVER_REMOTE, timeout=15)
-            self._jar_ready = True
+        # push 必须检查 returncode：权限不足时 adb 不抛异常，误判成功会让 server 因 CLASSPATH 缺失而 Aborted
+        if self._push_jar():
             return True
+        # MuMu 重启后 adbd 降级 shell，/data/local/tmp 无写权限 → adb root 恢复权限后重试
+        try:
+            self._adb("root", timeout=5)
+            time.sleep(1.5)
+        except Exception:
+            pass
+        return self._push_jar()
+
+    def _push_jar(self) -> bool:
+        try:
+            r = self._adb("push", SCRCPY_SERVER, SCRCPY_SERVER_REMOTE, timeout=15)
+            return r.returncode == 0
         except Exception:
             return False
 
     def _mark_launch_failed(self):
-        """握手/解码失败：重置 jar/display 缓存（设备可能重启过），清理现场"""
-        self._jar_ready = False
+        """握手/解码失败：重置 display 缓存（设备可能重启过），清理现场"""
         self._display_id = None
         self._cleanup_proc()
 
@@ -222,11 +230,14 @@ class ScreenStream:
                       "lock_video_orientation=0" % (SCRCPY_SERVER_REMOTE, self.max_fps))
         if self._display_id and self._display_id != 0:
             server_cmd += " display_id=%d" % self._display_id
-        # setsid 脱离 adb shell 进程组：MuMu 回收 shell 会话时不会连带 SIGKILL server
-        full_cmd = ("setsid nohup sh -c '%s' "
-                    ">%s 2>&1 &" % (server_cmd, SCRCPY_LOG_REMOTE))
+        # 前台长驻 adb shell：MuMu 的 adbd 会在 shell 退出时 SIGKILL 后台进程
+        # (setsid nohup 也拦不住，日志直接 "Killed")，故用 Popen 保活让 server 随 shell 会话存活。
+        # stdin 必须保持 PIPE —— 置 DEVNULL(EOF) 会让 server 误判客户端断开而退出。
         try:
-            self._adb("shell", full_cmd, timeout=5)
+            self._server_proc = subprocess.Popen(
+                [self.adb, "-s", self.serial, "shell", server_cmd],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
         except Exception:
             return
 

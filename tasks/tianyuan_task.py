@@ -1,6 +1,7 @@
 """天渊40任务 —— 40层爬塔，流程待补充"""
 import time
 import os
+import json
 import numpy as np
 from PIL import Image
 from tasks.base_task import BaseTask
@@ -29,11 +30,10 @@ CANCEL_PANELS = [
     (950, 1450),                 # 聊天记录面板
 ]
 
-# 战斗检测
-ROUND_CHECK = (500, 200)
-ROUND_RANGE = 200
-BATTLE_MODE_CHECK = (1000, 1450)
-BATTLE_MODE_RANGE = 100
+# 战斗检测 (右下角战斗模式按钮: 手动遇怪显'自动', 自动遇怪显'手动')
+BATTLE_BTN = (976, 1450)
+BATTLE_BTN_RANGE = 80
+BATTLE_BTN_THRESHOLD = 0.7
 
 # 地图名检测
 MAP_NAME_POS = (950, 110)
@@ -47,16 +47,19 @@ MOVE_WAIT = 2.0
 # ── 等待时间 ──────────────────────────────────
 BATTLE_CHECK_INTERVAL = 0.2
 
+# 每层阶段数
+TOTAL_PHASES = 6
+
 
 class TianyuanTask(BaseTask):
     """天渊40层自动任务"""
 
-    TOTAL_FLOORS = 40
-
-    def __init__(self, serial: str = ""):
+    def __init__(self, serial: str = "", start_phase: int = None, loop: int = 40):
         super().__init__("天渊40")
         self._serial = serial
         self._reader = None
+        self._start_phase = start_phase
+        self._loop = max(1, int(loop or 40))
 
     # ── OCR ────────────────────────────────────
 
@@ -86,17 +89,17 @@ class TianyuanTask(BaseTask):
 
     # ── 战斗检测 (模板匹配) ────────────────────
 
-    _tpl_round = None
+    _tpl_auto = None
     _tpl_manual = None
 
     def _load_templates(self):
-        if self._tpl_round is None:
+        if self._tpl_auto is None:
             import cv2
             tpl_dir = os.path.join(BASE_DIR, "templates", "tianyuan")
-            self._tpl_round = cv2.imread(os.path.join(tpl_dir, "round.png"))
+            self._tpl_auto = cv2.imread(os.path.join(tpl_dir, "auto.png"))
             self._tpl_manual = cv2.imread(os.path.join(tpl_dir, "manual.png"))
 
-    def _match_template(self, arr, tpl, cx, cy, spread) -> bool:
+    def _match_template(self, arr, tpl, cx, cy, spread, threshold=0.7) -> bool:
         import cv2
         h, w = arr.shape[:2]
         y1, y2 = max(0, cy - spread), min(h, cy + spread)
@@ -106,32 +109,37 @@ class TianyuanTask(BaseTask):
         roi = arr[y1:y2, x1:x2, :]
         result = cv2.matchTemplate(roi, tpl, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
-        return max_val > 0.7
+        return max_val > threshold
 
     def _is_in_battle(self) -> bool:
-        arr = self._screenshot_arr()
+        arr = self._stream_frame()
+        if arr is None:
+            arr = self._screenshot_arr()
         if arr is None:
             return False
         import cv2
         arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
         self._load_templates()
-        if self._match_template(arr, self._tpl_round, 500, 200, 80):
+        if self._match_template(arr, self._tpl_auto, BATTLE_BTN[0], BATTLE_BTN[1], BATTLE_BTN_RANGE, BATTLE_BTN_THRESHOLD):
             return True
-        if self._match_template(arr, self._tpl_manual, 1000, 1450, 80):
+        if self._match_template(arr, self._tpl_manual, BATTLE_BTN[0], BATTLE_BTN[1], BATTLE_BTN_RANGE, BATTLE_BTN_THRESHOLD):
             return True
         return False
 
     def _wait_battle_end(self):
         miss = 0
-        while self._running:
+        t0 = time.time()
+        miss_need = 2
+        min_battle = 3.0
+        while self._running and time.time() - t0 < 60:
+            time.sleep(0.3)
             if self._is_in_battle():
                 miss = 0
             else:
                 miss += 1
-                if miss >= 2:
-                    self.log_key("  战斗结束!")
+                if miss >= miss_need and time.time() - t0 >= min_battle:
                     break
-            time.sleep(BATTLE_CHECK_INTERVAL)
+        self.log_key("  战斗结束!")
 
     # ── NPC列表 ────────────────────────────────
 
@@ -383,33 +391,100 @@ class TianyuanTask(BaseTask):
             self.log("  检测到残留战斗，等待结束...")
             self._wait_battle_end()
 
+    # ── 断点续跑 (状态文件) ──────────────────────
+
+    @property
+    def _state_file(self) -> str:
+        safe = self._serial.replace(":", "_").replace("/", "_") if self._serial else "default"
+        return os.path.join(LOG_DIR, f"tianyuan_state_{safe}.json")
+
+    def _load_progress(self) -> int:
+        try:
+            with open(self._state_file, "r", encoding="utf-8") as f:
+                return int(json.load(f).get("last_done_phase", -1))
+        except Exception:
+            return -1
+
+    def _save_progress(self, phase: int):
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            with open(self._state_file, "w", encoding="utf-8") as f:
+                json.dump({"last_done_phase": phase}, f)
+            self.log_key(f"[进度] Phase {phase}/{TOTAL_PHASES} 完成")
+        except Exception as e:
+            self.log(f"  [进度] 保存失败: {e}")
+
+    def _clear_progress(self):
+        try:
+            if os.path.exists(self._state_file):
+                os.remove(self._state_file)
+                self.log_key("[进度] 已重置进度记录")
+        except Exception:
+            pass
+
+    def _log_phase(self, n: int, desc: str):
+        self.log_key(f"══ Phase {n}/{TOTAL_PHASES}: {desc} ══")
+
     # ── 主流程 ─────────────────────────────────
 
     def run(self):
         self.log_key("天渊40启动")
 
-        for floor in range(1, self.TOTAL_FLOORS + 1):
+        if self._start_phase is None:
+            done = self._load_progress()
+            if done >= 0:
+                start_phase = done + 1
+                if start_phase >= TOTAL_PHASES:
+                    start_phase = 0
+                self.log_key(f"[进度] 上次完成 Phase {done}，自动续跑 Phase {start_phase}")
+            else:
+                start_phase = 0
+        elif self._start_phase == 0:
+            self._clear_progress()
+            start_phase = 0
+            self.log_key("[进度] 已重置，从 Phase 0 开始")
+        else:
+            start_phase = self._start_phase
+            self.log_key(f"[进度] 手动从 Phase {start_phase} 开始")
+
+        for floor in range(1, self._loop + 1):
             if not self._running:
                 break
-            self.log_key(f"========== 第{floor}层 ==========")
+            self.log_key(f"════ 第 {floor}/{self._loop} 层 ════")
+            self._run_floor(start_phase, is_last=(floor == self._loop))
+            start_phase = 0
 
-            # 1. 找天渊使者 → 寻路
+        self._clear_progress()
+        self.log_key("天渊40流程完成!")
+
+    def _run_floor(self, start_phase: int, is_last: bool = False):
+        """单层 6 个 phase；is_last=True(最后一层)时跳过'去下一层'"""
+        if start_phase <= 0:
+            self._log_phase(0, "找天渊使者→寻路")
             self._find_and_pathfind(TARGET_NPC)
+            self._save_progress(0)
 
-            # 2. 接取任务
+        if start_phase <= 1:
+            self._log_phase(1, "接任务")
             self._quest_accept()
+            self._save_progress(1)
 
-            # 3. 自动战斗
+        if start_phase <= 2:
+            self._log_phase(2, "自动遇怪打1场")
             self._auto_battle()
+            self._save_progress(2)
 
-            # 4. 找天渊使者 → 寻路提交
+        if start_phase <= 3:
+            self._log_phase(3, "找天渊使者→寻路")
             self._find_and_pathfind(TARGET_NPC)
+            self._save_progress(3)
 
-            # 5. 提交任务
+        if start_phase <= 4:
+            self._log_phase(4, "交任务")
             self._quest_submit()
+            self._save_progress(4)
 
-            # 6. 前往下一层
-            if floor < self.TOTAL_FLOORS:
-                self._navigate_next_floor()
-
-        self.log_key("天渊40完成!")
+        if start_phase <= 5 and not is_last:
+            self._log_phase(5, "去下一层")
+            self._navigate_next_floor()
+            self._save_progress(5)

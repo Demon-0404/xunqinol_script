@@ -136,17 +136,19 @@ class BaseTask(ABC):
         except Exception:
             return None
 
-    def _ensure_stream_fresh(self, timeout: float = 3.0) -> bool:
+    def _ensure_stream_fresh(self, timeout: float = 8.0) -> bool:
         """按0前预热：确保视频流有新鲜帧，死了就等自愈重启完再操作，避免流空窗漏弹窗。
-        流活时零开销(get_frame 直接返回)；只在流死时多等至多 timeout 秒。"""
+        流活时零开销(get_frame 直接返回)；只在流死时多等至多 timeout 秒。
+        冷启动(含 jar 校验/display 探测/握手/首帧)约 4-6s，故每轮重查 get_stream
+        绕过 2s 重启节流真正拉起首帧，超时给到 8s。"""
         try:
             serial = getattr(self, "_serial", "")
             if not serial:
                 return False
             from core.screen_stream import get_stream
-            st = get_stream(serial)
             t0 = time.time()
             while time.time() - t0 < timeout and self._running:
+                st = get_stream(serial)   # 每轮重查: 流死后绕过 2s 重启节流, 真正拉起首帧
                 frame, _ = st.get_frame()
                 if frame is not None:
                     return True

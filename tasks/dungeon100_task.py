@@ -75,12 +75,13 @@ MAX_BATTLES = 2                  # 累计战斗次数
 class Dungeon100Task(BaseTask):
     """100副本自动任务 — 惊凡渊 -&gt; 裂影渊"""
 
-    def __init__(self, serial: str = "", start_phase: int = None):
+    def __init__(self, serial: str = "", start_phase: int = None, loop: int = 1):
         super().__init__("100副本")
         self._serial = serial
         self._reader = None
         self._battle_count = 0
         self._start_phase = start_phase
+        self._loop = max(1, int(loop or 1))
 
     # ── OCR ────────────────────────────────────
 
@@ -619,19 +620,26 @@ class Dungeon100Task(BaseTask):
         PATHFIND_WAIT = 20.0
         MAX_PATHFIND_ROUNDS = 4
         DIALOG_CHECK_AFTER = 2.0   # 寻路2s后才检测对话弹窗(走到NPC跟前才会弹)
+        DIALOG_HIT_NEED = 3        # 连续命中3次才认为到达
         arrived = False
         for attempt in range(MAX_PATHFIND_ROUNDS):
             elapsed = 0.0
+            consecutive = 0
             while elapsed < PATHFIND_WAIT and self._running:
                 if self._is_in_battle():
+                    consecutive = 0
                     self.log(f"  寻路中遇怪! (第{attempt + 1}次)")
                     self._wait_battle_end()
                     self.log(f"  继续寻路...")
                     break
                 if elapsed >= DIALOG_CHECK_AFTER and self._check_dialog_popup():
-                    self.log(f"  检测到对话对话框，已到达{target_npc}")
-                    arrived = True
-                    break
+                    consecutive += 1
+                    if consecutive >= DIALOG_HIT_NEED:
+                        self.log(f"  检测到对话对话框(连续{consecutive}次)，已到达{target_npc}")
+                        arrived = True
+                        break
+                else:
+                    consecutive = 0
                 time.sleep(BATTLE_CHECK_INTERVAL)
                 elapsed += BATTLE_CHECK_INTERVAL
             else:
@@ -805,6 +813,18 @@ class Dungeon100Task(BaseTask):
             start_phase = self._start_phase
             self.log_key(f"[进度] 手动从 Phase {start_phase} 开始")
 
+        for round_idx in range(self._loop):
+            if round_idx > 0:
+                self._battle_count = 0
+                self.log_key(f"════ 第 {round_idx + 1}/{self._loop} 轮 ════")
+            self._run_once(start_phase)
+            start_phase = 0
+            self.log_key(f"100副本流程完成! 累计 {self._battle_count} 场战斗")
+
+        self._clear_progress()
+
+    def _run_once(self, start_phase):
+
         # Phase 0: 从备忘打开副本 (备忘→副本→翻页→混沌邪灵渊→瞬间传送)
         if start_phase <= 0:
             self._log_phase(0, "从备忘打开副本(混沌邪灵渊)")
@@ -901,6 +921,3 @@ class Dungeon100Task(BaseTask):
             self._log_phase(10, "陨仙渊→阳谷 传送出地图+提交任务")
             self._quest_teleport()
             self._save_progress(10)
-
-        self._clear_progress()
-        self.log_key(f"100副本流程完成! 累计 {self._battle_count} 场战斗")

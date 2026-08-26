@@ -31,22 +31,25 @@ def build_task(spec: dict):
         return FlowTask("抓宠物", p["steps"], loop=p["loop"])
     if t == "dungeon100":
         from tasks.dungeon100_task import Dungeon100Task
-        return Dungeon100Task(serial=serial, start_phase=p.get("start_phase"))
+        return Dungeon100Task(serial=serial, start_phase=p.get("start_phase"), loop=p.get("loop", 1))
     if t == "dungeon90":
         from tasks.dungeon90_task import Dungeon90Task
-        return Dungeon90Task(serial=serial, start_phase=p.get("start_phase"))
+        return Dungeon90Task(serial=serial, start_phase=p.get("start_phase"), loop=p.get("loop", 1))
     if t == "tie1":
         from tasks.dungeon_tie1_task import DungeonTie1Task
-        return DungeonTie1Task(serial=serial, start_phase=p.get("start_phase"))
+        return DungeonTie1Task(serial=serial, start_phase=p.get("start_phase"), loop=p.get("loop", 1))
     if t == "tie2":
         from tasks.dungeon_tie2_task import DungeonTie2Task
-        return DungeonTie2Task(serial=serial, start_phase=p.get("start_phase"))
+        return DungeonTie2Task(serial=serial, start_phase=p.get("start_phase"), loop=p.get("loop", 1))
     if t == "tie3":
         from tasks.dungeon_tie3_task import DungeonTie3Task
-        return DungeonTie3Task(serial=serial, start_phase=p.get("start_phase"))
+        return DungeonTie3Task(serial=serial, start_phase=p.get("start_phase"), loop=p.get("loop", 1))
     if t == "tie4":
         from tasks.dungeon_tie4_task import DungeonTie4Task
-        return DungeonTie4Task(serial=serial, start_phase=p.get("start_phase"))
+        return DungeonTie4Task(serial=serial, start_phase=p.get("start_phase"), loop=p.get("loop", 1))
+    if t == "tianyuan":
+        from tasks.tianyuan_task import TianyuanTask
+        return TianyuanTask(serial=serial, start_phase=p.get("start_phase"), loop=p.get("loop", 40))
     if t == "crystal":
         from tasks.crystal_task import CrystalTask
         return CrystalTask(serial=serial, gaps=p.get("gaps"))
