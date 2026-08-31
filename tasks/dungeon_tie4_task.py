@@ -46,11 +46,13 @@ PANEL_TITLE_CHECK = (500, 100)   # "周围列表"检测
 PANEL_TITLE_SPREAD = 200
 
 # 战斗检测 (round不可靠须0.85, manual可靠0.7)
+# 手动/自动按钮实际中心约(974,1449)：旧(1000,1450)ROI左缘x=920裁掉按钮左3px，
+# 导致手动按钮满图1.0被砍到0.660<0.7，战斗永远检测不到。修正中心+扩大range。
 ROUND_CHECK = (500, 200)
 ROUND_RANGE = 80
 ROUND_THRESHOLD = 0.85
-MANUAL_CHECK = (1000, 1450)
-MANUAL_RANGE = 80
+MANUAL_CHECK = (975, 1450)
+MANUAL_RANGE = 100
 MANUAL_THRESHOLD = 0.7
 
 # 地图名检测 crop: y1,y2,x1,x2

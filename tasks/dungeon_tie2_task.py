@@ -793,8 +793,13 @@ class DungeonTie2Task(BaseTask):
         # Phase 3: 点(550,200)3次→(700,200)2次→渴望之境
         if start_phase <= 3:
             self._log_phase(3, "走路→渴望之境")
-            if not self._walk_phase("左上角(550,200)", POS_LEFT, lambda n: "渴望" in n, 3):
-                self._walk_phase("中间(700,200)", POS_MID, lambda n: "渴望" in n, 2)
+            for attempt in range(2):
+                if self._walk_phase("左上角(550,200)", POS_LEFT, lambda n: "渴望" in n, 3):
+                    break
+                if self._walk_phase("中间(700,200)", POS_MID, lambda n: "渴望" in n, 2):
+                    break
+                if attempt == 0:
+                    self.log_key("  未到达渴望之境，重试走路...")
             self._save_progress(3)
 
         # Phase 4: 渴望之境 找夫人→交→接 (交前补足战斗，只需1场)
@@ -813,7 +818,11 @@ class DungeonTie2Task(BaseTask):
         # Phase 5: 点(1050,200)3次→回忆之地
         if start_phase <= 5:
             self._log_phase(5, "右上角→回忆之地")
-            self._walk_phase("右上角(1050,200)", POS_RIGHT, lambda n: "忆" in n, 3)
+            for attempt in range(2):
+                if self._walk_phase("右上角(1050,200)", POS_RIGHT, lambda n: "忆" in n, 3):
+                    break
+                if attempt == 0:
+                    self.log_key("  未到达回忆之地，重试走路...")
             self._save_progress(5)
 
         # Phase 6: 回忆之地 遇怪补足→找红衣女→交→接
@@ -833,7 +842,11 @@ class DungeonTie2Task(BaseTask):
         # Phase 7: 点(550,200)4次→痛苦之境
         if start_phase <= 7:
             self._log_phase(7, "左上角4次→痛苦之境")
-            self._walk_phase("左上角(550,200)", POS_LEFT, lambda n: "痛苦" in n, 4)
+            for attempt in range(2):
+                if self._walk_phase("左上角(550,200)", POS_LEFT, lambda n: "痛苦" in n, 4):
+                    break
+                if attempt == 0:
+                    self.log_key("  未到达痛苦之境，重试走路...")
             self._save_progress(7)
 
         # Phase 8: 痛苦之境 找灭城将军→交→接→Boss战→交→接

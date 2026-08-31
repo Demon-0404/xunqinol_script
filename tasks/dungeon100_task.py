@@ -679,6 +679,15 @@ class Dungeon100Task(BaseTask):
         self.log("  *号接取完成")
         time.sleep(3.0)
 
+    def _wait_victory_gone(self, timeout=20.0):
+        """等待'战斗胜利'结算页消失，避免取消点击落在结算页上"""
+        t0 = time.time()
+        while time.time() - t0 < timeout and self._running:
+            if not self._check_text_at("战斗胜利", (500, 500), 200):
+                return True
+            time.sleep(0.5)
+        return False
+
     def _cancel_auto_battle(self):
         """取消自动遇怪：确保非战斗 → 按0 → 高频检测'状态取消/取消'弹窗确认，失败重试"""
         for attempt in range(3):
@@ -728,6 +737,9 @@ class Dungeon100Task(BaseTask):
 
             time.sleep(BATTLE_CHECK_INTERVAL)
 
+        # 等"战斗胜利"结算页消失再按0取消，避免取消点击落在结算页上(0键只在非战斗时生效)
+        self.log("  等待'战斗胜利'结算页消失...")
+        self._wait_victory_gone()
         # 取消：必须在非战斗时点击，成功后弹"自动遇怪状态取消!"
         self._cancel_auto_battle()
 
