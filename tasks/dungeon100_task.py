@@ -620,26 +620,27 @@ class Dungeon100Task(BaseTask):
         PATHFIND_WAIT = 20.0
         MAX_PATHFIND_ROUNDS = 4
         DIALOG_CHECK_AFTER = 2.0   # 寻路2s后才检测对话弹窗(走到NPC跟前才会弹)
-        DIALOG_HIT_NEED = 3        # 连续命中3次才认为到达
+        DIALOG_WINDOW = 5          # 最近 5 次检测窗口
+        DIALOG_HIT_NEED = 3        # 窗口内命中 3 次即到达(容忍OCR抖动，不要求连续)
         arrived = False
         for attempt in range(MAX_PATHFIND_ROUNDS):
             elapsed = 0.0
-            consecutive = 0
+            recent = []            # 最近几次对话检测结果(True/False)
             while elapsed < PATHFIND_WAIT and self._running:
                 if self._is_in_battle():
-                    consecutive = 0
                     self.log(f"  寻路中遇怪! (第{attempt + 1}次)")
                     self._wait_battle_end()
                     self.log(f"  继续寻路...")
                     break
-                if elapsed >= DIALOG_CHECK_AFTER and self._check_dialog_popup():
-                    consecutive += 1
-                    if consecutive >= DIALOG_HIT_NEED:
-                        self.log(f"  检测到对话对话框(连续{consecutive}次)，已到达{target_npc}")
+                if elapsed >= DIALOG_CHECK_AFTER:
+                    recent.append(self._check_dialog_popup())
+                    if len(recent) > DIALOG_WINDOW:
+                        recent.pop(0)
+                    hits = sum(recent)
+                    if hits >= DIALOG_HIT_NEED:
+                        self.log(f"  检测到对话对话框(最近{len(recent)}次命中{hits}次)，已到达{target_npc}")
                         arrived = True
                         break
-                else:
-                    consecutive = 0
                 time.sleep(BATTLE_CHECK_INTERVAL)
                 elapsed += BATTLE_CHECK_INTERVAL
             else:
