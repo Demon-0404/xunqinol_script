@@ -11,6 +11,11 @@ import socket
 import threading
 import base64
 
+# 单线程 torch，避免 Windows 下动态量化算子(linear_dynamic)的 OpenMP 竞争
+# 触发 "RuntimeError: could not execute a primitive"
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
@@ -27,6 +32,9 @@ def _load_reader():
     try:
         print("[OCR服务] 加载模型中(约10秒)...", flush=True)
         import numpy as np  # noqa: F401 确保 numpy 已导入
+        import torch
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
         import easyocr
         _reader = easyocr.Reader(['ch_sim'], gpu=False, verbose=False)
         print("[OCR服务] 模型就绪", flush=True)
