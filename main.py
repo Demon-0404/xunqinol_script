@@ -456,16 +456,49 @@ class App:
             self._stop_dev(w.get("tab_key", ""), dev)
 
     def _kill_ocr_service(self):
-        """按 pidfile 结束共享 OCR 服务进程"""
+        """结束共享 OCR 服务进程。
+
+        原实现靠 logs/ocr_service.pid 去 taskkill，但 pidfile 在服务反复
+        崩溃/重启时会变成僵尸 pid（指向已死进程）或漏掉真正占端口的进程，
+        导致旧服务残留、端口 8765 一直被旧代码占用。改为按端口 8765 扫描
+        LISTENING 进程直接杀掉，pidfile 仅作兜底。
+        """
         try:
+            pids = set()
+            # 1) 按端口找到真正占用 8765 的进程 PID（最可靠）
+            out = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, timeout=10
+            ).stdout.decode("gbk", "ignore")
+            for line in out.splitlines():
+                parts = line.split()
+                if (len(parts) >= 5
+                        and parts[1].endswith(":8765")
+                        and parts[3] == "LISTENING"):
+                    pids.add(parts[4])
+            # 2) 兜底：pidfile 里的 pid 一并纳入
             pid_file = os.path.join(BASE_DIR, "logs", "ocr_service.pid")
             if os.path.exists(pid_file):
-                with open(pid_file, "r", encoding="utf-8") as f:
-                    pid = int(f.read().strip())
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(pid)],
-                    capture_output=True, timeout=10)
-                os.remove(pid_file)
+                try:
+                    with open(pid_file, "r", encoding="utf-8") as f:
+                        pids.add(f.read().strip())
+                except Exception:
+                    pass
+            # 3) 逐个强杀（跳过自身）
+            for pid in pids:
+                if not pid or pid == str(os.getpid()):
+                    continue
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(pid)],
+                        capture_output=True, timeout=10)
+                except Exception:
+                    pass
+            # 4) 清理 pidfile
+            if os.path.exists(pid_file):
+                try:
+                    os.remove(pid_file)
+                except Exception:
+                    pass
         except Exception:
             pass
 
