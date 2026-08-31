@@ -40,3 +40,10 @@ frida-server
 tools/frida-server-*
 *.apk
 _pagefile*
+
+# Debug artifacts
+*.stackdump
+*.jpg
+_ocr_result.txt
+tools/*.txt
+tools/apk_extracted/
