@@ -350,9 +350,6 @@ class Dungeon100Task(BaseTask):
             if target and any(ch in current_map for ch in target):
                 self.log(f"  到达: '{current_map}'")
                 return
-            if current_map and original_map and current_map != original_map:
-                self.log(f"  地图已切换: '{original_map}' -> '{current_map}'")
-                return
 
     def _portal_seq_phase(self, click_seq, target: str):
         """按点击序列走传送门, 连续轮询检测目标地图名即停(phase5/6 验证版)"""
