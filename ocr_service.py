@@ -13,14 +13,15 @@ import base64
 
 # 单线程 torch，避免 Windows 下动态量化算子(linear_dynamic)的 OpenMP 竞争
 # 触发 "RuntimeError: could not execute a primitive"
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
 
 sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 HOST = "127.0.0.1"
-PORT = 8765
+# 端口从命令行读（默认 8765，共享单例服务）
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
 
 _reader = None
 _lock = threading.Lock()
@@ -33,8 +34,10 @@ def _load_reader():
         print("[OCR服务] 加载模型中(约10秒)...", flush=True)
         import numpy as np  # noqa: F401 确保 numpy 已导入
         import torch
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
+        # 4 线程平衡速度与稳定性：单线程会让 easyocr 识别大幅变慢；
+        # 实测 4/8 线程均不复现 oneDNN 崩溃，识别又已用 _lock 串行化。
+        torch.set_num_threads(4)
+        torch.set_num_interop_threads(4)
         import easyocr
         _reader = easyocr.Reader(['ch_sim'], gpu=False, verbose=False)
         print("[OCR服务] 模型就绪", flush=True)
@@ -101,7 +104,7 @@ def main():
     try:
         log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
         os.makedirs(log_dir, exist_ok=True)
-        with open(os.path.join(log_dir, "ocr_service.pid"), "w") as pf:
+        with open(os.path.join(log_dir, f"ocr_service_{PORT}.pid"), "w") as pf:
             pf.write(str(os.getpid()))
     except Exception:
         pass

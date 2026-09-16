@@ -12,7 +12,7 @@ import threading
 import subprocess
 
 HOST = "127.0.0.1"
-PORT = 8765
+DEFAULT_PORT = 8765
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -20,7 +20,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 class OCRClient:
     """连接共享 OCR 服务的客户端，readtext 接口兼容 easyocr.Reader"""
 
-    def __init__(self, host: str = HOST, port: int = PORT):
+    def __init__(self, host: str = HOST, port: int = DEFAULT_PORT):
         self._sock = socket.create_connection((host, port), timeout=2)
         self._sock.settimeout(30)
         self._lock = threading.Lock()
@@ -59,37 +59,41 @@ _client = None
 _client_lock = threading.Lock()
 
 
-def _start_service():
-    """启动 OCR 服务子进程（幂等：端口被占用时重复启动会自然失败退出）"""
-    log_path = os.path.join(BASE_DIR, "logs", "ocr_service.log")
+def _start_service(port: int = DEFAULT_PORT):
+    """启动指定端口的 OCR 服务子进程（幂等：端口被占用时重复启动会自然失败退出）"""
+    log_path = os.path.join(BASE_DIR, "logs", f"ocr_service_{port}.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "ab") as f:
         subprocess.Popen(
-            [sys.executable, os.path.join(BASE_DIR, "ocr_service.py")],
+            [sys.executable, os.path.join(BASE_DIR, "ocr_service.py"), str(port)],
             stdout=f, stderr=subprocess.STDOUT, cwd=BASE_DIR)
 
 
 def get_ocr_client() -> OCRClient:
     """获取（进程级）单例 OCR 客户端。连接失败时自动拉起服务。"""
     global _client
+    port = DEFAULT_PORT
     with _client_lock:
         if _client is not None:
             return _client
-        for attempt in range(2):
+        # 先探测：服务可能已常驻（热），秒连成功
+        try:
+            _client = OCRClient(port=port)
+            return _client
+        except Exception:
+            pass
+        # 冷启动：拉起服务，最多等 120 秒（模型加载 10-30 秒，留足余量）
+        print(f"[OCR] 服务未运行(端口{port})，正在启动(首次加载模型约10-30秒)...", flush=True)
+        _start_service(port)
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            time.sleep(0.5)
             try:
-                _client = OCRClient()
+                _client = OCRClient(port=port)
                 return _client
             except Exception:
-                print("[OCR] 服务未运行，正在启动(首次加载模型约10-30秒)...", flush=True)
-                _start_service()
-                for _ in range(60):
-                    time.sleep(0.5)
-                    try:
-                        _client = OCRClient()
-                        return _client
-                    except Exception:
-                        continue
-        raise RuntimeError("无法连接 OCR 服务")
+                continue
+        raise RuntimeError(f"无法连接 OCR 服务(端口{port})")
 
 
 def warmup():

@@ -59,6 +59,9 @@ def build_task(spec: dict):
     if t == "chumo":
         from tasks.chumo_task import ChumoTask
         return ChumoTask(serial=serial)
+    if t == "xunwu":
+        from tasks.xunwu_task import XunWuTask
+        return XunWuTask(serial=serial, target_items=p.get("target_items"))
     if t == "smith":
         from tasks.smith_task import SmithTask
         task = SmithTask()

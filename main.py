@@ -80,7 +80,9 @@ class App:
         self._tab_devices = {}        # tab_key -> list[device_name] (当前运行)
         self._tab_widgets = {}        # tab_key -> tab frame (用于运行标记)
         self._tab_loop_vars = {}      # tab_key -> tk.StringVar (循环次数)
-        self._notebook = None         # 标签页容器
+        self._notebook = None         # 标签页容器（已弃用，改用左侧导航）
+        self._nav_order = []          # [(tab, title, btn)] 任务导航注册顺序
+        self._current_tab = None      # 当前选中的 tab frame
         self._blood_monitors = {}  # name -> BloodMonitor
         self._blood_widgets = {}  # name -> (frame, status_label, btn)
         self._dungeon100_start_options = ["自动续跑", "从头开始 (Phase 0)"] + [f"Phase {i}" for i in range(1, 11)]
@@ -96,17 +98,20 @@ class App:
             ("tie1", "铁1副本"), ("tie2", "铁2副本"),
             ("tie3", "铁3副本"), ("tie4", "铁4副本"),
             ("tower", "玄兵塔"), ("chumo", "仗剑除魔"),
+            ("xunwu", "帮派寻物"),
         ]
         self._done_markers = {
             "dungeon100": "100副本流程完成", "dungeon90": "90副本流程完成",
             "tie1": "铁1副本流程完成", "tie2": "铁2副本流程完成",
             "tie3": "铁3副本流程完成", "tie4": "铁4副本流程完成",
             "tower": "玄兵塔全部通关", "chumo": "仗剑除魔全部完成",
+            "xunwu": "帮派寻物全部完成",
         }
         self._today_max = {
             "dungeon100": 3, "dungeon90": 3,
             "tie1": 2, "tie2": 2, "tie3": 2, "tie4": 2,
             "tower": 3, "chumo": 1,
+            "xunwu": 15,
         }
         self._today_names = dict(self._today_tasks)
         self._today_labels = {}   # tab_key -> tk.Label
@@ -204,26 +209,60 @@ class App:
         body.grid_columnconfigure(0, weight=1)              # 标签页：占剩余空间
         body.grid_columnconfigure(1, weight=0, minsize=420)  # 日志：固定宽度
 
-        # 左侧：标签页
-        notebook = ttk.Notebook(body)
-        notebook.grid(row=0, column=0, sticky="nsew")
-        self._notebook = notebook
+        # 左侧：垂直任务导航 + 内容区
+        task_area = ttk.Frame(body)
+        task_area.grid(row=0, column=0, sticky="nsew")
+        task_area.grid_rowconfigure(0, weight=1)
+        task_area.grid_columnconfigure(0, weight=0)   # 导航栏固定宽度
+        task_area.grid_columnconfigure(1, weight=1)   # 内容区占剩余
 
-        self._build_dungeon90_tab(notebook)
-        self._build_dungeon100_tab(notebook)
-        self._build_tie1_tab(notebook)
-        self._build_tie2_tab(notebook)
-        self._build_tie3_tab(notebook)
-        self._build_tie4_tab(notebook)
-        self._build_tianyuan_tab(notebook)
-        self._build_crystal_tab(notebook)
-        self._build_pet_tab(notebook)
-        self._build_tower_tab(notebook)
-        self._build_chumo_tab(notebook)
-        self._build_smith_tab(notebook)
-        self._build_monkey_tab(notebook)
-        self._build_blood_tab(notebook)
-        self._build_account_resource_tab(notebook)
+        # 左侧垂直导航栏（Canvas + Scrollbar 支持滚动）
+        nav_outer = ttk.Frame(task_area)
+        nav_outer.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        nav_outer.grid_rowconfigure(0, weight=1)
+        nav_outer.grid_columnconfigure(0, weight=1)
+
+        self._nav_canvas = tk.Canvas(nav_outer, bg=C_BG, highlightthickness=0,
+                                     width=150, bd=0)
+        self._nav_scroll = ttk.Scrollbar(nav_outer, orient="vertical",
+                                         command=self._nav_canvas.yview)
+        self._nav_canvas.configure(yscrollcommand=self._nav_scroll.set)
+        self._nav_canvas.grid(row=0, column=0, sticky="nsew")
+        self._nav_scroll.grid(row=0, column=1, sticky="ns")
+
+        self._nav_frame = ttk.Frame(self._nav_canvas)
+        self._nav_window = self._nav_canvas.create_window(
+            (0, 0), window=self._nav_frame, anchor="nw")
+        self._nav_frame.bind("<Configure>",
+                             lambda e: self._nav_canvas.configure(
+                                 scrollregion=self._nav_canvas.bbox("all")))
+        self._nav_canvas.bind("<Configure>",
+                              lambda e: self._nav_canvas.itemconfigure(
+                                  self._nav_window, width=e.width))
+        self._nav_canvas.bind("<MouseWheel>", self._on_nav_wheel)
+
+        # 内容容器
+        self._content_frame = ttk.Frame(task_area)
+        self._content_frame.grid(row=0, column=1, sticky="nsew")
+        self._content_frame.grid_rowconfigure(0, weight=1)
+        self._content_frame.grid_columnconfigure(0, weight=1)
+
+        self._build_dungeon90_tab(self._content_frame)
+        self._build_dungeon100_tab(self._content_frame)
+        self._build_tie1_tab(self._content_frame)
+        self._build_tie2_tab(self._content_frame)
+        self._build_tie3_tab(self._content_frame)
+        self._build_tie4_tab(self._content_frame)
+        self._build_tianyuan_tab(self._content_frame)
+        self._build_crystal_tab(self._content_frame)
+        self._build_pet_tab(self._content_frame)
+        self._build_tower_tab(self._content_frame)
+        self._build_chumo_tab(self._content_frame)
+        self._build_xunwu_tab(self._content_frame)
+        self._build_smith_tab(self._content_frame)
+        self._build_monkey_tab(self._content_frame)
+        self._build_blood_tab(self._content_frame)
+        self._build_account_resource_tab(self._content_frame)
 
         # 右侧：日志
         right = ttk.Frame(body)
@@ -341,6 +380,57 @@ class App:
         self._save_today_record(data)
         self._refresh_today_tab()
 
+    # ── 任务导航 ─────────────────────────────────
+
+    def _add_task_tab(self, tab, title):
+        """把任务 tab 挂到内容容器，并在左侧导航栏加按钮"""
+        btn = tk.Button(self._nav_frame, text=title, anchor="w",
+                        bg=C_BG, fg=C_DIM, activebackground="#1f2933",
+                        activeforeground=C_TEXT, font=(FONT_UI, 10),
+                        relief=tk.FLAT, bd=0, padx=16, pady=6, cursor="hand2",
+                        highlightthickness=0)
+        btn.pack(fill=tk.X, pady=1)
+        btn.config(command=lambda t=tab: self._select_task_tab(t))
+        btn.bind("<MouseWheel>", self._on_nav_wheel)
+        self._nav_order.append((tab, title, btn))
+        if self._current_tab is None:
+            self._select_task_tab(tab)
+
+    def _select_task_tab(self, tab):
+        """切换显示选中的任务内容，高亮对应导航按钮"""
+        self._current_tab = tab
+        for t, title, btn in self._nav_order:
+            if t is tab:
+                t.grid(row=0, column=0, sticky="nsew")
+            else:
+                t.grid_remove()
+        self._refresh_nav_style()
+
+    def _tab_running(self, tab) -> bool:
+        """判断某 tab 是否有设备在运行"""
+        for tab_key, tf in self._tab_widgets.items():
+            if tf is tab and self._tab_devices.get(tab_key):
+                return True
+        return False
+
+    def _refresh_nav_style(self):
+        """刷新导航按钮文字(运行●标记)与选中高亮"""
+        for t, title, btn in self._nav_order:
+            running = self._tab_running(t)
+            selected = (t is self._current_tab)
+            if selected:
+                bg, fg = C_PRIMARY, C_BG_INPUT   # 选中：绿底深字，醒目
+            elif running:
+                bg, fg = C_BG, C_WARN           # 运行中未选中：橙字
+            else:
+                bg, fg = C_BG, C_DIM            # 未选中：灰字
+            btn.config(text=title + (" ●" if running else ""), bg=bg, fg=fg)
+
+    def _on_nav_wheel(self, event):
+        """导航栏鼠标滚轮滚动"""
+        if self._nav_canvas.winfo_exists():
+            self._nav_canvas.yview_scroll(int(-event.delta / 120), "units")
+
     # ── 设备选择辅助 ─────────────────────────────
 
     def _build_device_select(self, tab, tab_key: str, on_start):
@@ -456,33 +546,36 @@ class App:
             self._stop_dev(w.get("tab_key", ""), dev)
 
     def _kill_ocr_service(self):
-        """结束共享 OCR 服务进程。
+        """结束 OCR 服务进程（默认 8765）。
 
-        原实现靠 logs/ocr_service.pid 去 taskkill，但 pidfile 在服务反复
-        崩溃/重启时会变成僵尸 pid（指向已死进程）或漏掉真正占端口的进程，
-        导致旧服务残留、端口 8765 一直被旧代码占用。改为按端口 8765 扫描
-        LISTENING 进程直接杀掉，pidfile 仅作兜底。
+        靠 pidfile + netstat 兜底扫 8765 端口，逐个强杀。
         """
         try:
             pids = set()
-            # 1) 按端口找到真正占用 8765 的进程 PID（最可靠）
+            log_dir = os.path.join(BASE_DIR, "logs")
+            # 1) 所有 ocr_service_*.pid 文件里的 pid
+            if os.path.isdir(log_dir):
+                for fn in os.listdir(log_dir):
+                    if fn.startswith("ocr_service_") and fn.endswith(".pid"):
+                        try:
+                            with open(os.path.join(log_dir, fn), "r", encoding="utf-8") as f:
+                                pids.add(f.read().strip())
+                        except Exception:
+                            pass
+            # 2) netstat 兜底：扫 8765 端口上的 LISTENING 进程
             out = subprocess.run(
                 ["netstat", "-ano"], capture_output=True, timeout=10
             ).stdout.decode("gbk", "ignore")
             for line in out.splitlines():
                 parts = line.split()
-                if (len(parts) >= 5
-                        and parts[1].endswith(":8765")
-                        and parts[3] == "LISTENING"):
-                    pids.add(parts[4])
-            # 2) 兜底：pidfile 里的 pid 一并纳入
-            pid_file = os.path.join(BASE_DIR, "logs", "ocr_service.pid")
-            if os.path.exists(pid_file):
+                if len(parts) < 5 or parts[3] != "LISTENING":
+                    continue
                 try:
-                    with open(pid_file, "r", encoding="utf-8") as f:
-                        pids.add(f.read().strip())
+                    port = int(parts[1].rsplit(":", 1)[1])
                 except Exception:
-                    pass
+                    continue
+                if port == 8765:
+                    pids.add(parts[4])
             # 3) 逐个强杀（跳过自身）
             for pid in pids:
                 if not pid or pid == str(os.getpid()):
@@ -494,11 +587,13 @@ class App:
                 except Exception:
                     pass
             # 4) 清理 pidfile
-            if os.path.exists(pid_file):
-                try:
-                    os.remove(pid_file)
-                except Exception:
-                    pass
+            if os.path.isdir(log_dir):
+                for fn in os.listdir(log_dir):
+                    if fn.startswith("ocr_service_") and fn.endswith(".pid"):
+                        try:
+                            os.remove(os.path.join(log_dir, fn))
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -514,14 +609,13 @@ class App:
         self.root.destroy()
 
     def _restart_ui(self):
-        """一键重启 UI 及服务：清理 worker/OCR → 拉起新实例 → 退出当前进程"""
+        """一键重启 UI：只杀 worker，保留 OCR 服务（热复用，避免重启后重新冷启动）"""
         for dev, w in list(self._workers.items()):
             try:
                 w["proc"].kill()
             except Exception:
                 pass
         self._workers.clear()
-        self._kill_ocr_service()
         try:
             subprocess.Popen(
                 [sys.executable, os.path.join(BASE_DIR, "main.py")],
@@ -549,14 +643,8 @@ class App:
         self._update_tab_titles()
 
     def _update_tab_titles(self):
-        """在运行中的任务标签页标题上标记 ●"""
-        if not self._notebook:
-            return
-        for tab_key, tab in self._tab_widgets.items():
-            running = bool(self._tab_devices.get(tab_key))
-            cur = self._notebook.tab(tab, "text") or tab_key
-            base = cur.replace(" ●", "")
-            self._notebook.tab(tab, text=base + (" ●" if running else ""))
+        """在运行中的任务导航按钮上标记 ●"""
+        self._refresh_nav_style()
 
     # ── 设备管理区填充 ───────────────────────────
 
@@ -681,9 +769,9 @@ class App:
 
     # ── 90副本页 ─────────────────────────────────
 
-    def _build_dungeon90_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="90副本")
+    def _build_dungeon90_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "90副本")
 
         self._build_device_select(tab, "dungeon90", self._on_start_dungeon90)
 
@@ -718,9 +806,9 @@ class App:
 
     # ── 100副本页 ─────────────────────────────────
 
-    def _build_dungeon100_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="100副本")
+    def _build_dungeon100_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "100副本")
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "dungeon100", self._on_start_dungeon100)
@@ -754,9 +842,9 @@ class App:
 
     # ── 铁1副本页 ─────────────────────────────────
 
-    def _build_tie1_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="铁1副本")
+    def _build_tie1_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "铁1副本")
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie1", self._on_start_tie1)
@@ -793,9 +881,9 @@ class App:
 
     # ── 铁2副本页 ─────────────────────────────────
 
-    def _build_tie2_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="铁2副本")
+    def _build_tie2_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "铁2副本")
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie2", self._on_start_tie2)
@@ -829,9 +917,9 @@ class App:
 
     # ── 铁3副本页 ─────────────────────────────────
 
-    def _build_tie3_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="铁3副本")
+    def _build_tie3_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "铁3副本")
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie3", self._on_start_tie3)
@@ -870,9 +958,9 @@ class App:
 
     # ── 铁4副本页 ─────────────────────────────────
 
-    def _build_tie4_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="铁4副本")
+    def _build_tie4_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "铁4副本")
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tie4", self._on_start_tie4)
@@ -910,9 +998,9 @@ class App:
 
     # ── 天渊40页 ─────────────────────────────────
 
-    def _build_tianyuan_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="天渊40")
+    def _build_tianyuan_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "天渊40")
 
         # 设备选择行（每台设备行内含: 起点选择 + 上次进度）
         self._build_device_select(tab, "tianyuan", self._on_start_tianyuan)
@@ -943,9 +1031,9 @@ class App:
 
     # ── 水晶刷怪页 ─────────────────────────────────
 
-    def _build_crystal_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="水晶刷怪")
+    def _build_crystal_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "水晶刷怪")
 
         # 设备选择行
         self._build_device_select(tab, "crystal", self._on_start_crystal)
@@ -990,9 +1078,9 @@ class App:
 
     # ── 抓宠页 ─────────────────────────────────────
 
-    def _build_pet_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="抓宠物")
+    def _build_pet_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "抓宠物")
 
         # 设备选择行
         self._build_device_select(tab, "pet", self._on_start_pet)
@@ -1016,9 +1104,9 @@ class App:
 
     # ── 玄兵塔页 ─────────────────────────────────
 
-    def _build_tower_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="玄兵塔")
+    def _build_tower_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "玄兵塔")
 
         # 设备选择行
         self._build_device_select(tab, "tower", self._on_start_tower)
@@ -1042,9 +1130,9 @@ class App:
 
     # ── 仗剑除魔页 ─────────────────────────────
 
-    def _build_chumo_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="仗剑除魔")
+    def _build_chumo_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "仗剑除魔")
 
         # 设备选择行
         self._build_device_select(tab, "chumo", self._on_start_chumo)
@@ -1057,11 +1145,37 @@ class App:
         ttk.Label(tab, text=help_text, foreground=C_DIM,
                   justify=tk.LEFT).pack(anchor=tk.W, pady=4)
 
+    # ── 帮派寻物页 ─────────────────────────────
+
+    def _build_xunwu_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "帮派寻物")
+
+        # 设备选择行
+        self._build_device_select(tab, "xunwu", self._on_start_xunwu)
+
+        help_text = (
+            "20环跑环任务 —— 自动对话内务总管、识别帮贡物、接取与提交。\n"
+            "使用条件: 站在内务总管旁。\n"
+            "仅领取目标帮贡物(残魄石/精魄石/溟晶碎粒)，其余取消刷新。"
+        )
+        ttk.Label(tab, text=help_text, foreground=C_DIM,
+                  justify=tk.LEFT).pack(anchor=tk.W, pady=4)
+
+        # 领取目标帮贡物选择
+        self._xunwu_target_var = tk.StringVar(value="三个都领取")
+        ttk.Label(tab, text="领取帮贡物:").pack(anchor=tk.W, pady=(6, 0))
+        target_frame = ttk.Frame(tab)
+        target_frame.pack(anchor=tk.W, pady=2)
+        for text in ["三个都领取", "只领取残魄石", "只领取精魄石", "只领取溟晶碎粒"]:
+            ttk.Radiobutton(target_frame, text=text, variable=self._xunwu_target_var,
+                            value=text).pack(side=tk.LEFT, padx=4)
+
     # ── 名匠石磨页 ─────────────────────────────
 
-    def _build_smith_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="名匠石磨")
+    def _build_smith_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "名匠石磨")
 
         # 设备选择行
         self._build_device_select(tab, "smith", self._on_start_smith)
@@ -1085,9 +1199,9 @@ class App:
 
     # ── 打泼猴页 ─────────────────────────────────
 
-    def _build_monkey_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="打泼猴")
+    def _build_monkey_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "打泼猴")
 
         # 设备选择行
         self._build_device_select(tab, "monkey", self._on_start_monkey)
@@ -1110,9 +1224,9 @@ class App:
 
     # ── 血量显示页 ─────────────────────────────────
 
-    def _build_blood_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="血量显示")
+    def _build_blood_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "血量显示")
 
         top_bar = ttk.Frame(tab)
         top_bar.pack(fill=tk.X, pady=(0, 6))
@@ -1441,9 +1555,9 @@ class App:
         self._save_account_resources(self._ar_records)
         self._ar_refresh_table()
 
-    def _build_account_resource_tab(self, notebook):
-        tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="账号资源记录")
+    def _build_account_resource_tab(self, container):
+        tab = ttk.Frame(container, padding=8)
+        self._add_task_tab(tab, "账号资源记录")
         self._ar_checked = set()
 
         ttk.Label(tab, text="手动填写。点击最左列勾选；双击单元格可编辑(回车保存)；账号/资源下拉框自动带出已有名字。",
@@ -1773,6 +1887,23 @@ class App:
             self._log(f"[{dev}] 已有任务在运行，跳过")
             return
         self._start_worker("chumo", dev, {"task_type": "chumo"})
+
+    # ── 帮派寻物 ─────────────────────────────────────
+
+    def _on_start_xunwu(self, dev):
+        if dev in self._workers:
+            self._log(f"[{dev}] 已有任务在运行，跳过")
+            return
+        target_map = {
+            "三个都领取": ["残魄石", "精魄石", "溟晶碎粒"],
+            "只领取残魄石": ["残魄石"],
+            "只领取精魄石": ["精魄石"],
+            "只领取溟晶碎粒": ["溟晶碎粒"],
+        }
+        choice = self._xunwu_target_var.get()
+        target_items = target_map.get(choice, ["残魄石", "精魄石", "溟晶碎粒"])
+        spec = {"task_type": "xunwu", "params": {"target_items": target_items}}
+        self._start_worker("xunwu", dev, spec)
 
     # ── 名匠石磨 ─────────────────────────────────────
 
