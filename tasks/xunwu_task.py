@@ -176,10 +176,10 @@ class XunWuTask(BaseTask):
         G = crop[:, :, 1].astype(int)
         B = crop[:, :, 2].astype(int)
         mask = (R > 120) & ((R - G) > 50) & ((R - B) > 50)
-        red = np.zeros(crop.shape[:2], dtype=np.uint8)
-        red[mask] = 255
-        if red.sum() == 0:
+        if not mask.any():
             return ""
+        # 保留红色像素 R 通道亮度(而非纯白二值化)，避免"魄"等复杂字笔画细节丢失
+        red = np.where(mask, R, 0).astype(np.uint8)
         big = np.array(Image.fromarray(red).resize(
             (red.shape[1] * 2, red.shape[0] * 2), Image.LANCZOS))
         big_rgb = np.stack([big] * 3, axis=-1)
@@ -188,7 +188,7 @@ class XunWuTask(BaseTask):
             res = reader.readtext(big_rgb)
         except Exception:
             return ""
-        parts = [r[1] for r in res if r[2] >= 0.1]
+        parts = [r[1] for r in res if r[2] >= 0.05]
         return "".join(parts)
 
     def _recognize_item(self, max_retry: int = 3) -> str:
