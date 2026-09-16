@@ -20,6 +20,7 @@ NEXT_PAGE = (520, 1330)          # 翻页按钮
 AUTO_PATHFIND = (500, 660)       # 自动寻路按钮
 KEY5 = (150, 1590)               # 数字键5确认
 KEY0 = (950, 1590)               # 数字键0 → 自动遇怪
+STAR_KEY = (150, 1790)           # *号键 → 一键提交
 TARGET_NPC = "天渊使者"           # 目标NPC
 
 # 面板检测
@@ -37,12 +38,11 @@ BATTLE_BTN_THRESHOLD = 0.7
 
 # 地图名检测
 MAP_NAME_POS = (950, 110)
-MAP_NAME_RANGE = 80
+MAP_NAME_RANGE = 120
 
 # 楼层导航
-MOVE_LEFT = (100, 1100)
-MOVE_RIGHT = (1000, 1100)
-MOVE_WAIT = 2.0
+MOVE_LEFT = (400, 1100)
+MOVE_RIGHT = (800, 1100)
 
 # ── 等待时间 ──────────────────────────────────
 BATTLE_CHECK_INTERVAL = 0.2
@@ -141,6 +141,29 @@ class TianyuanTask(BaseTask):
                     break
         self.log_key("  战斗结束!")
 
+    def _check_dialog_popup(self) -> bool:
+        """检测对话对话框弹窗(走到NPC跟前才出现)：上部区域全宽(y<800)出现'按5键'提示。
+        模糊匹配'按5键'/'按5'/'5键'，避开战斗结算'按5键继续'(y~950)。"""
+        arr = self._stream_frame()
+        if arr is None:
+            arr = self._screenshot_arr()
+        if arr is None:
+            return False
+        h, w = arr.shape[:2]
+        x1, x2 = 0, w
+        y1, y2 = 0, min(h, 800)
+        crop = arr[y1:y2, x1:x2, :]
+        reader = self._get_reader()
+        try:
+            results = reader.readtext(crop)
+        except Exception:
+            return False
+        for r in results:
+            text = r[1]
+            if r[2] >= 0.1 and ("按5键" in text or "按5" in text or "5键" in text):
+                return True
+        return False
+
     # ── NPC列表 ────────────────────────────────
 
     def _check_text_at(self, keyword: str, center: tuple, spread: int) -> bool:
@@ -170,6 +193,19 @@ class TianyuanTask(BaseTask):
                 time.sleep(0.5)
                 return True
         return False
+
+    def _quest_submit(self):
+        """提交任务: 5→5→* → 等12s结算/宠物升级弹窗消失 → 若仍挡着点一次取消"""
+        self.log("  提交: 5→5→*...")
+        self._safe_touch(KEY5)
+        time.sleep(0.8)
+        self._safe_touch(KEY5)
+        time.sleep(0.8)
+        self._safe_touch(STAR_KEY)
+        self.log("  提交完成，等待12s...")
+        time.sleep(12.0)
+        # 宠物升级弹窗可能很久才消失，12s后若仍有弹窗挡着点一次取消
+        self._dismiss_panels()
 
     def _open_npc_list(self):
         for retry in range(3):
@@ -273,23 +309,39 @@ class TianyuanTask(BaseTask):
             time.sleep(0.3)
             self._safe_touch(KEY5)
         self.log("  自动寻路中(监测战斗)...")
-        PATHFIND_WAIT = 3.0
+        PATHFIND_WAIT = 20.0
         MAX_PATHFIND_ROUNDS = 4
+        DIALOG_CHECK_AFTER = 2.0   # 寻路2s后才检测对话弹窗(走到NPC跟前才会弹)
+        DIALOG_WINDOW = 5          # 最近 5 次检测窗口
+        DIALOG_HIT_NEED = 3        # 窗口内命中 3 次即到达(容忍OCR抖动，不要求连续)
+        arrived = False
         for attempt in range(MAX_PATHFIND_ROUNDS):
             elapsed = 0.0
+            recent = []            # 最近几次对话检测结果(True/False)
             while elapsed < PATHFIND_WAIT and self._running:
                 if self._is_in_battle():
                     self.log(f"  寻路中遇怪! (第{attempt + 1}次)")
                     self._wait_battle_end()
                     self.log("  继续寻路...")
                     break
+                if elapsed >= DIALOG_CHECK_AFTER:
+                    recent.append(self._check_dialog_popup())
+                    if len(recent) > DIALOG_WINDOW:
+                        recent.pop(0)
+                    hits = sum(recent)
+                    if hits >= DIALOG_HIT_NEED:
+                        self.log(f"  检测到对话对话框(最近{len(recent)}次命中{hits}次)，已到达{target_npc}")
+                        arrived = True
+                        break
                 time.sleep(BATTLE_CHECK_INTERVAL)
                 elapsed += BATTLE_CHECK_INTERVAL
             else:
                 self.log("  寻路完成")
+                arrived = True
+            if arrived:
                 break
-        else:
-            self.log(f"  寻路等待达上限")
+        if not arrived:
+            self.log(f"  寻路等待达上限({MAX_PATHFIND_ROUNDS}次)")
         if self._is_in_battle():
             self._wait_battle_end()
         self.log(f"  到达{target_npc}")
@@ -297,70 +349,81 @@ class TianyuanTask(BaseTask):
 
     # ── 楼层导航 ─────────────────────────────
 
-    def _battle_aware_click(self, pos: tuple, wait: float):
-        """点击并等待，期间监测战斗（战斗时暂停计时）"""
-        if self._is_in_battle():
-            self.log("  点击前检测到战斗，等待结束...")
-            self._wait_battle_end()
-        self._safe_touch(pos)
-        elapsed = 0.0
-        while elapsed < wait and self._running:
-            if self._is_in_battle():
-                self.log("  移动中遇怪，等待战斗结束...")
-                self._wait_battle_end()
-                self.log("  继续移动...")
-            time.sleep(BATTLE_CHECK_INTERVAL)
-            elapsed += BATTLE_CHECK_INTERVAL
-
-    # 中文数字字符集
-    CN_NUMS = set("一二三四五六七八九十")
-
-    def _extract_floor_num(self, text: str) -> str:
-        """从地图名中提取楼层数字，如 '天渊一层' → '一'"""
-        nums = [ch for ch in text if ch in self.CN_NUMS]
-        return nums[-1] if nums else ""
-
-    def _check_floor_num(self) -> str:
-        """读取当前地图楼层数字，返回如 '一'、'二'，失败返回空"""
+    def _get_map_name(self) -> str:
+        """读取当前地图名(如'天渊七层')，教父走screencap非视频流；失败返回空"""
         arr = self._screenshot_arr()
         if arr is None:
             return ""
         h, w = arr.shape[:2]
-        y1, y2 = max(0, MAP_NAME_POS[1] - MAP_NAME_RANGE), min(h, MAP_NAME_POS[1] + MAP_NAME_RANGE)
-        x1, x2 = max(0, MAP_NAME_POS[0] - MAP_NAME_RANGE), min(w, MAP_NAME_POS[0] + MAP_NAME_RANGE)
+        cx, cy = MAP_NAME_POS
+        y1, y2 = max(0, cy - MAP_NAME_RANGE), min(h, cy + MAP_NAME_RANGE)
+        x1, x2 = max(0, cx - MAP_NAME_RANGE), min(w, cx + MAP_NAME_RANGE)
         crop = arr[y1:y2, x1:x2, :]
         reader = self._get_reader()
         try:
             results = reader.readtext(crop)
         except Exception:
             return ""
-        if results:
-            text = max(results, key=lambda r: r[2])[1]
-            return self._extract_floor_num(text)
-        return ""
+        parts = []
+        for r in results:
+            if r[2] < 0.5:
+                continue
+            text = r[1]
+            if not any('一' <= ch <= '鿿' for ch in text):
+                continue
+            parts.append(text)
+        return "".join(parts)
 
     def _navigate_next_floor(self):
-        """左右移动进入下一层，通过楼层数字变化判断是否进入"""
-        before = self._check_floor_num()
-        self.log(f"  当前楼层: {before}")
+        """左右移动进入下一层：每步检测地图名变化，变了即停(参考100副本传送门阶段)"""
+        original_map = self._get_map_name()
+        for _ in range(3):
+            if original_map:
+                break
+            time.sleep(1.0)
+            original_map = self._get_map_name()
+        self.log(f"  当前地图: '{original_map}'")
 
-        moves = [
-            ("左1", MOVE_LEFT),
-            ("左2", MOVE_LEFT),
-            ("右1", MOVE_RIGHT),
-            ("右2", MOVE_RIGHT),
-        ]
-        for name, pos in moves:
-            self.log(f"  向{name}移动 ({pos[0]},{pos[1]})...")
-            self._battle_aware_click(pos, MOVE_WAIT)
-            time.sleep(0.5)
-            after = self._check_floor_num()
-            self.log(f"  {name}后: {after}")
-            if after and before and after != before:
-                self.log_key(f"  楼层变化: {before} → {after}!")
+        click_seq = [("左下角", MOVE_LEFT)] * 5 + [("右下角", MOVE_RIGHT)] * 5
+        WAIT_STEP = 3.0          # 每次点击(走路)间隔
+        PORTAL_DONE_WAIT = 10.0  # 点满后等传送动画兜底
+        clicks = 0
+        last_click = -1e9
+        done_deadline = None
+
+        while self._running:
+            # 移动中遇怪：等待战斗结束再继续
+            if self._is_in_battle():
+                self.log("  移动中遇怪，等待战斗结束...")
+                self._wait_battle_end()
+                last_click = time.time()
+                continue
+
+            current_map = self._get_map_name()
+            if current_map:
+                if not original_map:
+                    # 弹窗遮挡导致起始读空，移动中首次识别到即作为基准
+                    original_map = current_map
+                    self.log(f"  首次识别到地图: '{original_map}'")
+                elif current_map != original_map:
+                    self.log_key(f"  地图已切换: '{original_map}' → '{current_map}'!")
+                    return
+
+            if clicks < len(click_seq) and time.time() - last_click >= WAIT_STEP:
+                name, pos = click_seq[clicks]
+                self.log(f"  向{name}移动 (第{clicks + 1}/{len(click_seq)}次)...")
+                self._safe_touch(pos)
+                clicks += 1
+                last_click = time.time()
+                if clicks >= len(click_seq):
+                    done_deadline = time.time() + PORTAL_DONE_WAIT
+                    self.log(f"  点满{len(click_seq)}次，等传送动画{PORTAL_DONE_WAIT}s...")
+
+            if done_deadline and time.time() > done_deadline:
+                self.log(f"  地图未变化(等传送动画超时)")
                 return
 
-        self.log("  楼层未变化")
+            time.sleep(0.3)
 
     # ── 自动战斗 ─────────────────────────────
 
