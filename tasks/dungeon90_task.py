@@ -31,6 +31,7 @@ LEFT_UP = (20, 400)              # 左上角
 RIGHT_DOWN = (1050, 1100)        # 右下角
 RIGHT_UP = (1050, 400)           # 右上角
 PORTAL_50 = (50, 600)            # 禁忌古道传送门
+PORTAL_LINGYIN = (1050, 400)     # 回灵隐传送门(禁忌古道内)
 
 # NPC列表 (复用100副本坐标)
 NEARBY_BTN = (350, 1780)         # 周围列表按钮
@@ -319,6 +320,22 @@ class Dungeon90Task(BaseTask):
                 last_click = time.time()
                 self.log_key(f"  点击 {clicks}/{times} 后地图: '{name}'")
             time.sleep(0.3)
+        return False
+
+    def _tap_portal_wait(self, pos, timeout=3.0):
+        """点击传送门一次，随后 timeout 秒内不间断检测地图名是否变化(相对点击前)。"""
+        before = self._get_map_name()
+        self.log_key(f"── 点击传送门 {pos} 一次，等{timeout:.0f}s内检测地图名变化 ──")
+        self._safe_touch(pos)
+        t0 = time.time()
+        name = before
+        while time.time() - t0 < timeout and self._running:
+            time.sleep(0.4)
+            name = self._get_map_name()
+            if name and name != before:
+                self.log_key(f"  地图名已变化: '{before}' → '{name}'")
+                return True
+        self.log_key(f"  地图名未变化: '{name}'")
         return False
 
     # ── 自动遇怪 ────────────────────────────────
@@ -768,8 +785,8 @@ class Dungeon90Task(BaseTask):
             self._log_phase(8, "进禁忌古道→遇怪2次→回灵隐")
             self._safe_touch(PORTAL_50); time.sleep(3.0)
             self._auto_battle_phase(2)
-            if not self._walk_fast("右下角", RIGHT_DOWN, lambda n: "灵隐" in n, times=10):
-                self._walk_fast("右上角", RIGHT_UP, lambda n: "灵隐" in n, times=10)
+            self._walk_fast("右下角", RIGHT_DOWN, lambda n: "灵隐" in n, times=10)
+            self._tap_portal_wait(PORTAL_LINGYIN, timeout=5.0)
             self._save_progress(8)
 
         # Phase 9: 灵隐绝境 找瑞南羽 → 交 → 接
